@@ -1,0 +1,29 @@
+{
+  "name": "api-dash",
+  "version": "0.1.0",
+  "description": "Standalone API spend dashboard with radial gauges — monitor Anthropic, OpenAI, fal.ai, and more",
+  "main": "server.js",
+  "bin": {
+    "api-dash": "./server.js"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js --open"
+  },
+  "keywords": [
+    "api",
+    "dashboard",
+    "anthropic",
+    "openai",
+    "billing",
+    "usage",
+    "monitor"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.100.0",
+    "dotenv": "^16.4.5",
+    "jsonwebtoken": "^9.0.3",
+    "ws": "^8.16.0"
+  }
+}
