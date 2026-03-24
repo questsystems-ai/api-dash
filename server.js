@@ -5,7 +5,24 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const { exec } = require("child_process");
 const { WebSocketServer } = require("ws");
+
+function pickFolderDialog() {
+  return new Promise((resolve) => {
+    let cmd;
+    if (process.platform === "win32") {
+      cmd = `powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = 'Select project folder'; if ($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $f.SelectedPath } else { '' }"`;
+    } else if (process.platform === "darwin") {
+      cmd = `osascript -e 'POSIX path of (choose folder with prompt "Select project folder")'`;
+    } else {
+      cmd = `zenity --file-selection --directory --title="Select project folder" 2>/dev/null`;
+    }
+    exec(cmd, { timeout: 60000 }, (err, stdout) => {
+      resolve(stdout.trim().replace(/[\r\n]+$/, "") || null);
+    });
+  });
+}
 
 // Load .env — prioritize local dir, then cwd (for drop-in-repo usage)
 require("dotenv").config({ path: path.join(__dirname, ".env.local") });
@@ -31,6 +48,247 @@ const PORT = parseInt(process.env.PORT || "3737", 10);
 const POLL_INTERVAL = 60_000; // refresh every 60s
 const BUDGET = parseFloat(process.env.MONTHLY_BUDGET || "100");
 
+// ── Provider result cache (slow billing APIs shouldn't be hit every 60s) ──────
+const providerCache = {};
+const PROVIDER_TTL = {
+  default: 60 * 60 * 1000,  // 1 hour for all providers
+};
+
+function getCached(provider) {
+  const entry = providerCache[provider];
+  if (!entry) return null;
+  const ttl = PROVIDER_TTL[provider] || PROVIDER_TTL.default;
+  if (Date.now() - entry.ts < ttl) return entry.data;
+  return null;
+}
+
+function setCache(provider, data) {
+  providerCache[provider] = { ts: Date.now(), data };
+}
+
+// ── Key detection + management ────────────────────────────────────────────────
+
+const KEY_PATTERNS = [
+  { test: k => k.startsWith("sk-ant-admin"), envKey: "ANTHROPIC_ADMIN_KEY", provider: "anthropic", label: "Anthropic Admin Key" },
+  { test: k => k.startsWith("sk-ant-"),      envKey: "ANTHROPIC_API_KEY",   provider: "anthropic", label: "Anthropic API Key",  llm: "anthropic" },
+  { test: k => k.startsWith("sk-admin-"),    envKey: "OPENAI_ADMIN_KEY",    provider: "openai",    label: "OpenAI Admin Key" },
+  { test: k => k.startsWith("sk-proj-"),     envKey: "OPENAI_API_KEY",      provider: "openai",    label: "OpenAI API Key",    llm: "openai" },
+  { test: k => k.startsWith("gsk_"),         envKey: "GROQ_API_KEY",        provider: null,        label: "Groq API Key",      llm: "groq" },
+  { test: k => k.startsWith("r8_"),          envKey: "REPLICATE_API_TOKEN", provider: "replicate", label: "Replicate Token" },
+  { test: k => k.startsWith("VENICE_INFERENCE_KEY"), envKey: "VENICE_API_KEY", provider: "venice", label: "Venice API Key" },
+  { test: k => k.startsWith("AIzaSy"),       envKey: "GOOGLE_API_KEY",      provider: "google",    label: "Google API Key",    llm: "google" },
+  { test: k => k.startsWith("sk_") && k.length > 30 && !k.startsWith("sk-"), envKey: "ELEVENLABS_API_KEY", provider: "elevenlabs", label: "ElevenLabs Key" },
+  { test: k => /^[0-9a-f]{8}-[0-9a-f]{4}/.test(k), envKey: "FAL_KEY",     provider: "fal",       label: "fal.ai Key" },
+];
+
+const LLM_PROVIDERS = {
+  anthropic: { label: "Claude",  envKey: "ANTHROPIC_API_KEY", model: "claude-sonnet-4-6" },
+  openai:    { label: "GPT-4o",  envKey: "OPENAI_API_KEY",    model: "gpt-4o-mini" },
+  google:    { label: "Gemini",  envKey: "GOOGLE_API_KEY",    model: "gemini-1.5-flash" },
+  groq:      { label: "Groq",    envKey: "GROQ_API_KEY",      model: "llama-3.1-8b-instant" },
+};
+
+function detectKey(key) {
+  return KEY_PATTERNS.find(p => p.test(key)) || null;
+}
+
+function writeEnvKey(envKey, value) {
+  const envPath = path.join(__dirname, ".env.local");
+  let content = "";
+  try { content = fs.readFileSync(envPath, "utf8"); } catch {}
+  const lines = content.split("\n");
+  const idx = lines.findIndex(l => new RegExp(`^\\s*${envKey}\\s*=`).test(l));
+  if (idx >= 0) lines[idx] = `${envKey}=${value}`;
+  else lines.push(`${envKey}=${value}`);
+  fs.writeFileSync(envPath, lines.join("\n").replace(/\n{3,}/g, "\n\n").trim() + "\n");
+  process.env[envKey] = value;
+}
+
+function getAvailableLLMs() {
+  return Object.entries(LLM_PROVIDERS)
+    .filter(([, p]) => !!process.env[p.envKey])
+    .map(([id, p]) => ({ id, label: p.label, model: p.model }));
+}
+
+// ── Tracked repo Supabase cost tracking ──────────────────────────────────────
+
+const GOOGLE_PROJECTS_FILE = path.join(__dirname, "google-projects.json");
+
+function loadGoogleProjects() {
+  try { return JSON.parse(fs.readFileSync(GOOGLE_PROJECTS_FILE, "utf8")); }
+  catch { return []; }
+}
+
+function saveGoogleProjects(projects) {
+  fs.writeFileSync(GOOGLE_PROJECTS_FILE, JSON.stringify(projects, null, 2));
+}
+
+function readRepoEnv(repoPath) {
+  const vars = {};
+  for (const name of [".env.local", ".env"]) {
+    const filePath = path.join(repoPath, name);
+    let content = "";
+    try { content = fs.readFileSync(filePath, "utf8"); } catch { continue; }
+    for (const line of content.split("\n")) {
+      const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/);
+      if (m && !vars[m[1]]) vars[m[1]] = m[2].replace(/^["']|["']$/g, "").trim();
+    }
+    break; // prefer .env.local
+  }
+  return vars;
+}
+
+async function checkGoogleProjectStatus(supabaseUrl, supabaseKey) {
+  try {
+    const client = createClient(supabaseUrl, supabaseKey);
+    const { data, error } = await client
+      .from("api_usage")
+      .select("id")
+      .eq("provider", "google")
+      .limit(1);
+    if (error) {
+      if (error.code === "42P01" || (error.message || "").includes("does not exist")) return "no_table";
+      return "error";
+    }
+    return data && data.length > 0 ? "complete" : "no_rows";
+  } catch { return "error"; }
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = "";
+    req.on("data", chunk => body += chunk);
+    req.on("end", () => { try { resolve(JSON.parse(body)); } catch { resolve({}); } });
+    req.on("error", reject);
+  });
+}
+
+async function callLLM(provider, messages, systemPrompt) {
+  const def = LLM_PROVIDERS[provider];
+  if (!def) throw new Error(`Unknown LLM provider: ${provider}`);
+  const key = process.env[def.envKey];
+  if (!key) throw new Error(`${def.label} key not configured`);
+
+  // Build content array for a message, including optional image attachment
+  function buildContent(msg) {
+    if (!msg.image) return msg.content;
+    return [
+      { type: "text", text: msg.content || " " },
+      { type: "image", source: { type: "base64", media_type: msg.image.mimeType, data: msg.image.data } },
+    ];
+  }
+
+  if (provider === "anthropic") {
+    const apiMessages = messages.map(m => ({ role: m.role, content: buildContent(m) }));
+    const r = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
+      body: JSON.stringify({ model: def.model, max_tokens: 1024, system: systemPrompt, messages: apiMessages }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error?.message || r.statusText);
+    return d.content[0].text;
+  }
+
+  if (provider === "openai" || provider === "groq") {
+    const base = provider === "groq" ? "https://api.groq.com/openai/v1" : "https://api.openai.com/v1";
+    const apiMessages = messages.map(m => {
+      if (!m.image) return { role: m.role, content: m.content };
+      return { role: m.role, content: [
+        { type: "text", text: m.content || " " },
+        { type: "image_url", image_url: { url: `data:${m.image.mimeType};base64,${m.image.data}` } },
+      ]};
+    });
+    const r = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${key}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: def.model, messages: [{ role: "system", content: systemPrompt }, ...apiMessages] }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error?.message || r.statusText);
+    return d.choices[0].message.content;
+  }
+
+  if (provider === "google") {
+    const apiMessages = messages.map(m => {
+      const parts = m.content ? [{ text: m.content }] : [];
+      if (m.image) parts.push({ inlineData: { mimeType: m.image.mimeType, data: m.image.data } });
+      return { role: m.role === "assistant" ? "model" : "user", parts };
+    });
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${def.model}:generateContent?key=${key}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ contents: apiMessages, systemInstruction: { parts: [{ text: systemPrompt }] } }),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error?.message || r.statusText);
+    return d.candidates[0].content.parts[0].text;
+  }
+
+  throw new Error(`No handler for provider: ${provider}`);
+}
+
+function buildSystemPrompt() {
+  const spend = latestData ? latestData.providers.map(p =>
+    `  - ${p.label}: $${p.totalCost.toFixed(2)} (30d)`
+  ).join("\n") : "  (data loading)";
+  const total = latestData ? `$${latestData.grandTotal.toFixed(2)}` : "unknown";
+  const llms = getAvailableLLMs().map(l => l.label).join(", ") || "none";
+
+  return `You are the api-dash co-pilot — a helpful assistant embedded in a real-time API spend dashboard.
+
+## What api-dash is
+A standalone Node.js dashboard (server.js + public/index.html) that monitors API spend across AI providers in real-time. Runs on localhost:3737. It polls provider billing APIs hourly, caches results, and streams updates to the browser via WebSocket. Radial gauges show each provider's billing-cycle spend vs a per-provider budget set in the UI and stored in localStorage.
+
+## Current spend (live data)
+Total: ${total}
+${spend}
+
+## Configured LLM providers for this co-pilot
+${llms}
+
+## Your role
+- Help users add new API providers (explain what key to get, where to find it, what permissions are needed)
+- Discuss spend trends and cost optimization strategies when asked
+- Answer questions about how api-dash works
+- Be concise — users are developers, not beginners
+- When a user pastes a key in chat, remind them to use the key-paste tile instead (it writes it to .env.local automatically)
+
+## Key patterns you know about
+- sk-ant-admin → Anthropic Admin (for billing)
+- sk-ant- → Anthropic API (for co-pilot)
+- sk-admin- → OpenAI Admin (for billing)
+- sk-proj- → OpenAI API (for co-pilot)
+- r8_ → Replicate
+- VENICE_INFERENCE_KEY → Venice
+- AIzaSy → Google
+- sk_ (long) → ElevenLabs
+- UUID format → fal.ai
+- gsk_ → Groq (co-pilot only, no billing API)
+
+## Editing the dashboard code
+You can modify the dashboard directly. The user can share the current code with you using the "Share code" buttons in the co-pilot toolbar.
+
+When you want to make a change, return one or more edit blocks in this exact format:
+
+\`\`\`edit
+FILE: index.html
+FIND:
+exact text to find (must appear exactly once in the file)
+REPLACE:
+replacement text
+\`\`\`
+
+Rules:
+- FILE must be either \`server.js\` or \`index.html\`
+- FIND must match the existing code exactly (copy from what the user shared)
+- You can return multiple edit blocks in one message for multi-part changes
+- Keep FIND strings short but unique enough to match only once
+- After the user applies an edit, the previous backup is preserved so they can always reset
+- For UI changes (colors, layout, labels, adding sections) prefer editing \`index.html\`
+- For new providers, polling logic, or API integrations, edit \`server.js\``;
+}
+
 // ── Supabase client (for providers without billing APIs) ─────────────────────
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
@@ -53,14 +311,6 @@ const PROVIDERS = {
     keys: ["OPENAI_ADMIN_KEY"],
     envHint: "OPENAI_ADMIN_KEY",
     docsUrl: "https://platform.openai.com/settings/organization/admin-keys",
-  },
-  google: {
-    label: "Google AI",
-    color: "#4285f4",
-    keys: ["GOOGLE_API_KEY"],
-    envHint: "GOOGLE_API_KEY",
-    docsUrl: "https://aistudio.google.com/apikey",
-    dashboardUrl: "https://aistudio.google.com/billing",
   },
   fal: {
     label: "fal.ai",
@@ -183,6 +433,16 @@ async function fetchAnthropicCosts(start, end) {
       }
     }
 
+    // If cost_report was rate-limited (totalCost=0) but usage_report has data, use estimated total
+    const byModelTotal = Object.values(byModel).reduce((s, m) => s + m.cost, 0);
+    if (totalCost === 0 && byModelTotal > 0) {
+      totalCost = byModelTotal;
+    } else if (totalCost > 0 && byModelTotal > 0) {
+      // Normalize byModel so breakdown sums to authoritative cost_report total
+      const scale = totalCost / byModelTotal;
+      for (const m of Object.values(byModel)) m.cost = m.cost * scale;
+    }
+
     const daily = Object.entries(dailyMap)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, cost]) => ({ date, cost: +cost.toFixed(6) }));
@@ -300,12 +560,13 @@ async function fetchElevenLabsUsage(start, end) {
 
 // ── Supabase-based cost estimation (for providers without billing APIs) ──────
 
-async function fetchSupabaseCosts(provider, start, end) {
-  if (!supabase) return null;
+async function fetchSupabaseCosts(provider, start, end, clientOverride = null) {
+  const client = clientOverride || supabase;
+  if (!client) return null;
 
   try {
     // Query api_usage table
-    const { data: usageRows, error: usageErr } = await supabase
+    const { data: usageRows, error: usageErr } = await client
       .from("api_usage")
       .select("model, cost, input_units, output_units, created_at")
       .eq("provider", provider)
@@ -325,7 +586,7 @@ async function fetchSupabaseCosts(provider, start, end) {
         "kling-2.1-pro", "kling-2.6-pro", "kling-3.0", "kling-3.0-pro", "kling-o1",
         "wan-2.2", "seedance-2.0", "pika-scenes",
       ];
-      const { data, error } = await supabase
+      const { data, error } = await client
         .from("generations")
         .select("model, video_model, cost, type, created_at")
         .gte("created_at", start + "T00:00:00Z")
@@ -435,88 +696,10 @@ async function getGoogleAccessToken() {
 }
 
 async function fetchGoogleBillingCosts(start, end) {
-  const billingAccount = process.env.GOOGLE_BILLING_ACCOUNT || "011EAD-1507CF-B1940C";
-  const accessToken = await getGoogleAccessToken();
-
-  if (!accessToken) {
-    console.log(`  [google] no service account configured, falling back to Supabase`);
-    return await fetchSupabaseCosts("google", start, end);
-  }
-
-  try {
-    const accountId = `billingAccounts/${billingAccount}`;
-    const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
-
-    // Try Cloud Billing report endpoint
-    const reportUrl = `https://cloudbilling.googleapis.com/v1beta/${accountId}/reports:query`;
-    const reportRes = await fetch(reportUrl, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        dateRange: {
-          startDate: { year: +start.slice(0, 4), month: +start.slice(5, 7), day: +start.slice(8, 10) },
-          endDate: { year: +end.slice(0, 4), month: +end.slice(5, 7), day: +end.slice(8, 10) },
-        },
-        currencyCode: "USD",
-      }),
-    });
-
-    if (reportRes.ok) {
-      const data = await reportRes.json();
-      console.log(`  [google] billing report response:`, JSON.stringify(data).slice(0, 500));
-
-      const dailyMap = {};
-      const byModel = {};
-      let totalCost = 0;
-
-      // Parse rows — structure varies by API version
-      const rows = data.rows || data.costRows || data.results || [];
-      for (const row of rows) {
-        const costObj = row.cost || row.costAmount || {};
-        const cost = parseFloat(typeof costObj === "object" ? (costObj.amount || costObj.nanos / 1e9 || "0") : costObj || "0");
-        const dateObj = row.date || row.usageDate || {};
-        const date = typeof dateObj === "object"
-          ? `${dateObj.year}-${String(dateObj.month).padStart(2, "0")}-${String(dateObj.day).padStart(2, "0")}`
-          : String(dateObj);
-        const service = row.service?.description || row.serviceName || "Google AI";
-
-        totalCost += cost;
-        if (!byModel[service]) byModel[service] = { count: 0, cost: 0 };
-        byModel[service].count += 1;
-        byModel[service].cost += cost;
-        if (date && date !== "undefined-0undefined-0undefined") {
-          dailyMap[date] = (dailyMap[date] || 0) + cost;
-        }
-      }
-
-      if (totalCost > 0) {
-        const daily = Object.entries(dailyMap)
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([date, cost]) => ({ date, cost: +cost.toFixed(4) }));
-        console.log(`  ✓ google (billing API): $${totalCost.toFixed(2)}`);
-        return { totalCost, byModel, daily, source: "api" };
-      }
-    } else {
-      const errText = await reportRes.text().catch(() => "");
-      console.warn(`  [google] billing report HTTP ${reportRes.status}: ${errText.slice(0, 300)}`);
-    }
-
-    // Fallback: try listing projects under the billing account for verification
-    const projRes = await fetch(`https://cloudbilling.googleapis.com/v1/${accountId}/projects`, { headers });
-    if (projRes.ok) {
-      const projData = await projRes.json();
-      const projects = projData.projectBillingInfo || [];
-      console.log(`  [google] billing account has ${projects.length} projects: ${projects.map(p => p.projectId).join(", ")}`);
-    } else {
-      console.warn(`  [google] project list HTTP ${projRes.status}: ${(await projRes.text().catch(() => "")).slice(0, 200)}`);
-    }
-
-    console.log(`  [google] billing API returned no spend data, falling back to Supabase`);
-    return await fetchSupabaseCosts("google", start, end);
-  } catch (e) {
-    console.warn(`  [google] billing error:`, e.message);
-    return await fetchSupabaseCosts("google", start, end);
-  }
+  // Google Cloud has no public REST API that returns actual spend data.
+  // Costs are sourced from the Supabase api_usage table, where romantasy-v1
+  // and other apps log Gemini API calls with provider = "google".
+  return await fetchSupabaseCosts("google", start, end);
 }
 
 async function fetchReplicateCosts(start, end) {
@@ -648,8 +831,15 @@ async function fetchAllProviders() {
     configured.map(async (p) => {
       if (fetchers[p]) {
         try {
+          const cached = getCached(p);
+          if (cached) {
+            results[p] = cached;
+            console.log(`  ✓ ${p}: $${cached.totalCost.toFixed(2)} (cached)`);
+            return;
+          }
           results[p] = await fetchers[p]();
           if (results[p]) {
+            setCache(p, results[p]);
             console.log(`  ✓ ${p}: $${results[p].totalCost.toFixed(2)}`);
           } else {
             console.log(`  ✗ ${p}: no data (fetcher returned null)`);
@@ -687,6 +877,67 @@ async function fetchAllProviders() {
       dashboardUrl: def.dashboardUrl || null,
     };
   });
+
+  // Project Supabase tracking — one tile per provider found in api_usage
+  // Providers already covered by dedicated billing API tiles — skip to avoid double-counting
+  const SUPABASE_SKIP = new Set(["anthropic", "openai", "fal", "fal.ai", "elevenlabs", "replicate"]);
+
+  const SUPABASE_PROVIDER_META = {
+    google:     { label: "Gemini",    color: "#4285f4" },
+    "azure-tts":{ label: "Azure TTS", color: "#0078d4" },
+    venice:     { label: "Venice",    color: "#7c3aed" },
+    wavespeed:  { label: "WaveSpeed", color: "#06b6d4" },
+    akool:      { label: "Akool",     color: "#f97316" },
+    piapi:      { label: "PiAPI",     color: "#ec4899" },
+    modal:      { label: "Modal",     color: "#6366f1" },
+  };
+
+  const googleProjects = loadGoogleProjects();
+  await Promise.all(googleProjects.map(async (project) => {
+    if (!project.supabaseUrl || !project.supabaseKey) return;
+    const projectClient = createClient(project.supabaseUrl, project.supabaseKey);
+
+    // Discover which providers have rows in this project's api_usage table
+    const discoverKey = `gp_${project.slug}_providers`;
+    let knownProviders = getCached(discoverKey);
+    if (!knownProviders) {
+      try {
+        const { data: rows } = await projectClient
+          .from("api_usage").select("provider").gte("created_at", start + "T00:00:00Z");
+        const distinct = [...new Set((rows || []).map(r => r.provider).filter(Boolean))];
+        // Always include google so the tile appears even before first log
+        if (!distinct.includes("google")) distinct.push("google");
+        knownProviders = distinct;
+        setCache(discoverKey, knownProviders);
+      } catch { knownProviders = ["google"]; }
+    }
+
+    await Promise.all(knownProviders.filter(p => !SUPABASE_SKIP.has(p)).map(async (provider) => {
+      const cacheKey = `gp_${project.slug}_${provider}`;
+      let data = getCached(cacheKey);
+      if (!data) {
+        data = await fetchSupabaseCosts(provider, start, end, projectClient);
+        if (!data) data = { totalCost: 0, byModel: {}, daily: [], source: "supabase" };
+        setCache(cacheKey, data);
+      }
+      const meta = SUPABASE_PROVIDER_META[provider] || { label: provider, color: "#888" };
+      providers.push({
+        id: `gp_${project.slug}_${provider}`,
+        label: `${project.title} / ${meta.label}`,
+        color: meta.color,
+        totalCost: data.totalCost,
+        byModel: data.byModel || {},
+        daily: data.daily || [],
+        extra: null,
+        source: data.source || "supabase",
+        carbon: estimateCarbon(provider, data.totalCost),
+        noBillingApi: false,
+        dashboardUrl: null,
+        isGoogleProject: true,
+        projectSlug: project.slug,
+      });
+    }));
+  }));
 
   const grandTotal = providers.reduce((s, p) => s + p.totalCost, 0);
   const totalCarbon = providers.reduce((s, p) => s + p.carbon.co2Grams, 0);
@@ -754,11 +1005,289 @@ const MIME = {
   ".ico": "image/x-icon",
 };
 
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
+  const cors = { "Access-Control-Allow-Origin": "*", "Content-Type": "application/json" };
+
   // API endpoint
   if (req.url === "/api/spend") {
-    res.writeHead(200, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+    res.writeHead(200, cors);
     res.end(JSON.stringify(latestData || { providers: [], grandTotal: 0, budget: BUDGET }));
+    return;
+  }
+
+  if (req.url === "/api/config" && req.method === "GET") {
+    res.writeHead(200, cors);
+    res.end(JSON.stringify({
+      llms: getAvailableLLMs(),
+      firstBoot: getAvailableLLMs().length === 0 && Object.keys(PROVIDERS).filter(isConfigured).length === 0,
+    }));
+    return;
+  }
+
+  if (req.url === "/api/keys" && req.method === "POST") {
+    const body = await readBody(req);
+    const key = (body.key || "").trim();
+    if (!key) { res.writeHead(400, cors); res.end(JSON.stringify({ error: "No key provided" })); return; }
+    const match = detectKey(key);
+    if (!match) { res.writeHead(422, cors); res.end(JSON.stringify({ error: "Unrecognized key format" })); return; }
+    writeEnvKey(match.envKey, key);
+    if (match.provider) delete providerCache[match.provider];
+    refresh();
+    res.writeHead(200, cors);
+    res.end(JSON.stringify({ envKey: match.envKey, provider: match.provider, label: match.label, llm: match.llm || null }));
+    return;
+  }
+
+  if (req.url.startsWith("/api/google-projects/") && req.method === "DELETE") {
+    const slug = req.url.slice("/api/google-projects/".length);
+    saveGoogleProjects(loadGoogleProjects().filter(p => p.slug !== slug));
+    // Clear all cache keys for this project (one per provider + the discovery key)
+    for (const key of Object.keys(providerCache)) {
+      if (key.startsWith(`gp_${slug}`)) delete providerCache[key];
+    }
+    refresh();
+    res.writeHead(200, cors);
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  if (req.url === "/api/google-projects" && req.method === "GET") {
+    res.writeHead(200, cors);
+    res.end(JSON.stringify(loadGoogleProjects()));
+    return;
+  }
+
+  if (req.url === "/api/google-projects" && req.method === "POST") {
+    const body = await readBody(req);
+    const { title, repoPath } = body;
+    if (!title || !repoPath) {
+      res.writeHead(400, cors);
+      res.end(JSON.stringify({ error: "title and repoPath required" }));
+      return;
+    }
+
+    const envVars = readRepoEnv(repoPath);
+    const sbUrl = envVars.SUPABASE_URL || envVars.NEXT_PUBLIC_SUPABASE_URL || "";
+    const sbKey = envVars.SUPABASE_SERVICE_ROLE_KEY || "";
+
+    if (!sbUrl || !sbKey) {
+      res.writeHead(422, cors);
+      res.end(JSON.stringify({
+        error: "No Supabase credentials found",
+        hint: `Looked for SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in ${repoPath}/.env.local`,
+        found: Object.keys(envVars).filter(k => k.includes("SUPABASE")),
+      }));
+      return;
+    }
+
+    const status = await checkGoogleProjectStatus(sbUrl, sbKey);
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+
+    // Save the project whenever Supabase is reachable (complete or no_rows — tile shows $0 until data flows)
+    if (status === "complete" || status === "no_rows") {
+      const projects = loadGoogleProjects();
+      if (!projects.find(p => p.slug === slug)) {
+        projects.push({ slug, title, repoPath, supabaseUrl: sbUrl, supabaseKey: sbKey });
+        saveGoogleProjects(projects);
+        refresh();
+      }
+    }
+
+    const CREATE_TABLE_SQL = `create table if not exists api_usage (
+  id uuid default gen_random_uuid() primary key,
+  created_at timestamptz default now(),
+  provider text not null,
+  model text,
+  endpoint text,
+  input_units integer default 0,
+  output_units integer default 0,
+  cost numeric(10, 6) default 0,
+  user_id text,
+  metadata jsonb default '{}'
+);`;
+
+    const LOGGER_SNIPPET = `// Add after each Gemini generateContent() call:
+const result = await model.generateContent(prompt);
+const usage = result.response.usageMetadata;
+
+const pricing = {
+  "gemini-2.5-pro":   { input: 1.25,  output: 10.0 },
+  "gemini-2.5-flash": { input: 0.15,  output: 0.60 },
+  "gemini-2.0-flash": { input: 0.10,  output: 0.40 },
+};
+const p = pricing[modelName] ?? { input: 1.25, output: 10.0 };
+const cost = (usage.promptTokenCount * p.input + usage.candidatesTokenCount * p.output) / 1_000_000;
+
+// fire-and-forget
+supabase.from("api_usage").insert({
+  provider: "google", model: modelName,
+  input_units: usage.promptTokenCount,
+  output_units: usage.candidatesTokenCount,
+  cost,
+}).then(() => {}).catch(() => {});`;
+
+    res.writeHead(200, cors);
+    res.end(JSON.stringify({
+      status,
+      title,
+      slug,
+      saved: status === "complete",
+      sql: status === "no_table" ? CREATE_TABLE_SQL : null,
+      snippet: status === "no_rows" ? LOGGER_SNIPPET : null,
+    }));
+    return;
+  }
+
+  // ── Dashboard code editing ─────────────────────────────────────────────────
+
+  const EDITABLE_FILES = {
+    "server.js":  path.join(__dirname, "server.js"),
+    "index.html": path.join(__dirname, "public", "index.html"),
+  };
+
+  if (req.url.startsWith("/api/file") && req.method === "GET") {
+    const name = new URL(req.url, "http://x").searchParams.get("name");
+    const filePath = EDITABLE_FILES[name];
+    if (!filePath) { res.writeHead(400, cors); res.end(JSON.stringify({ error: "Unknown file" })); return; }
+    const content = fs.readFileSync(filePath, "utf8");
+    const bakPath = filePath + ".bak";
+    const hasBak = fs.existsSync(bakPath);
+    res.writeHead(200, cors);
+    res.end(JSON.stringify({ name, content, hasBak }));
+    return;
+  }
+
+  if (req.url === "/api/file" && req.method === "POST") {
+    const body = await readBody(req);
+    const { name, find, replace, content } = body;
+    const filePath = EDITABLE_FILES[name];
+    if (!filePath) { res.writeHead(400, cors); res.end(JSON.stringify({ error: "Unknown file" })); return; }
+
+    const bakPath = filePath + ".bak";
+    const current = fs.readFileSync(filePath, "utf8");
+
+    // Create backup on first edit only
+    if (!fs.existsSync(bakPath)) fs.writeFileSync(bakPath, current);
+
+    let next;
+    if (content !== undefined) {
+      // Full replace
+      next = content;
+    } else if (find !== undefined && replace !== undefined) {
+      if (!current.includes(find)) {
+        res.writeHead(422, cors);
+        res.end(JSON.stringify({ error: "FIND string not found in file — check the text matches exactly" }));
+        return;
+      }
+      // Only replace first occurrence
+      next = current.replace(find, replace);
+    } else {
+      res.writeHead(400, cors); res.end(JSON.stringify({ error: "Provide content or find+replace" })); return;
+    }
+
+    fs.writeFileSync(filePath, next);
+    res.writeHead(200, cors);
+    res.end(JSON.stringify({ ok: true, hasBak: true }));
+    return;
+  }
+
+  if (req.url === "/api/file/reset" && req.method === "POST") {
+    const body = await readBody(req);
+    const { name } = body;
+    const filePath = EDITABLE_FILES[name];
+    if (!filePath) { res.writeHead(400, cors); res.end(JSON.stringify({ error: "Unknown file" })); return; }
+    const bakPath = filePath + ".bak";
+    if (!fs.existsSync(bakPath)) { res.writeHead(404, cors); res.end(JSON.stringify({ error: "No backup found" })); return; }
+    fs.writeFileSync(filePath, fs.readFileSync(bakPath, "utf8"));
+    fs.unlinkSync(bakPath);
+    res.writeHead(200, cors);
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
+  if (req.url === "/api/file/bak-status" && req.method === "GET") {
+    const status = {};
+    for (const [name, filePath] of Object.entries(EDITABLE_FILES)) {
+      status[name] = fs.existsSync(filePath + ".bak");
+    }
+    res.writeHead(200, cors);
+    res.end(JSON.stringify(status));
+    return;
+  }
+
+  if (req.url === "/api/pick-folder" && req.method === "GET") {
+    const folderPath = await pickFolderDialog();
+    res.writeHead(200, cors);
+    res.end(JSON.stringify({ path: folderPath || null }));
+    return;
+  }
+
+  if (req.url === "/api/scan-folder" && req.method === "POST") {
+    const body = await readBody(req);
+    const { folderPath } = body;
+    if (!folderPath) { res.writeHead(400, cors); res.end(JSON.stringify({ error: "folderPath required" })); return; }
+    const envVars = readRepoEnv(folderPath);
+    const folderName = path.basename(folderPath);
+    const detected = [];
+    for (const [k, v] of Object.entries(envVars)) {
+      if (!v) continue;
+      const match = detectKey(v);
+      if (match) {
+        detected.push({ envKey: match.envKey, label: match.label, provider: match.provider || null, llm: match.llm || null, value: v });
+      }
+    }
+    res.writeHead(200, cors);
+    res.end(JSON.stringify({ folderName, folderPath, detected }));
+    return;
+  }
+
+  if (req.url === "/api/scan-supabase-projects" && req.method === "POST") {
+    const body = await readBody(req);
+    const { parentPath } = body;
+    if (!parentPath) { res.writeHead(400, cors); res.end(JSON.stringify({ error: "parentPath required" })); return; }
+
+    let entries;
+    try { entries = fs.readdirSync(parentPath, { withFileTypes: true }); }
+    catch (e) { res.writeHead(422, cors); res.end(JSON.stringify({ error: "Cannot read folder: " + e.message })); return; }
+
+    const existing = new Set(loadGoogleProjects().map(p => p.slug));
+    const found = [];
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const subPath = path.join(parentPath, entry.name);
+      const envVars = readRepoEnv(subPath);
+      const sbUrl = envVars.SUPABASE_URL || envVars.NEXT_PUBLIC_SUPABASE_URL || "";
+      const sbKey = envVars.SUPABASE_SERVICE_ROLE_KEY || "";
+      if (!sbUrl || !sbKey) continue;
+      const slug = entry.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+      found.push({
+        name: entry.name,
+        slug,
+        path: subPath,
+        supabaseUrl: sbUrl,
+        supabaseKey: sbKey,
+        alreadyAdded: existing.has(slug),
+      });
+    }
+
+    res.writeHead(200, cors);
+    res.end(JSON.stringify({ parentPath, found }));
+    return;
+  }
+
+  if (req.url === "/api/copilot" && req.method === "POST") {
+    const body = await readBody(req);
+    const { messages, provider } = body;
+    if (!messages || !provider) { res.writeHead(400, cors); res.end(JSON.stringify({ error: "Missing messages or provider" })); return; }
+    try {
+      const reply = await callLLM(provider, messages, buildSystemPrompt());
+      res.writeHead(200, cors);
+      res.end(JSON.stringify({ reply }));
+    } catch (e) {
+      res.writeHead(500, cors);
+      res.end(JSON.stringify({ error: e.message }));
+    }
     return;
   }
 
