@@ -1281,8 +1281,8 @@
     padding: 10px 12px;
     cursor: pointer;
   }
-  .scan-key-row input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; }
-  .scan-key-label { flex: 1; font-size: 13px; color: var(--text); }
+  .scan-key-row input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; flex-shrink: 0; }
+  .scan-key-label { font-size: 13px; color: var(--text); }
   .scan-key-hint { font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: var(--text2); }
 
   /* ── First-boot modal ───────────────────────────── */
@@ -1977,19 +1977,39 @@ function showScanConfirmModal(detected, folderName) {
   el.id = "scanConfirmModal";
   el.className = "modal-backdrop";
 
-  const rows = detected.map((k, i) => `
+  const newKeys = detected.filter(k => !k.alreadySet);
+  const alreadyKeys = detected.filter(k => k.alreadySet);
+
+  const rows = newKeys.map((k, i) => `
     <label class="scan-key-row">
       <input type="checkbox" id="scanKey_${i}" checked>
-      <span class="scan-key-label">${k.label}</span>
-      <span class="scan-key-hint">${k.envKey}</span>
+      <div style="flex:1;min-width:0">
+        <div class="scan-key-label">${k.label}</div>
+        <div class="scan-key-hint">${k.purpose}</div>
+      </div>
+      <span class="scan-key-hint" style="white-space:nowrap">${k.envKey}</span>
     </label>
   `).join("");
 
+  const alreadyRows = alreadyKeys.length ? `
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--text2);margin-top:10px;margin-bottom:4px">Already configured:</div>
+    ${alreadyKeys.map(k => `
+      <div class="scan-key-row" style="opacity:0.45;cursor:default">
+        <input type="checkbox" disabled checked style="opacity:0.4">
+        <div style="flex:1;min-width:0">
+          <div class="scan-key-label">${k.label}</div>
+          <div class="scan-key-hint">${k.purpose}</div>
+        </div>
+        <span class="scan-key-hint" style="white-space:nowrap">${k.envKey}</span>
+      </div>
+    `).join("")}
+  ` : "";
+
   el.innerHTML = `
-    <div class="modal" style="max-width:460px">
+    <div class="modal" style="max-width:480px">
       <div class="modal-title">Keys found in <span style="color:var(--text2);font-weight:400">${folderName}</span></div>
-      <div class="modal-subtitle">Select which keys to save to your api-dash .env.local</div>
-      <div class="scan-key-list">${rows}</div>
+      <div class="modal-subtitle">${newKeys.length ? "Select which to save to api-dash .env.local" : "All keys from this folder are already configured."}</div>
+      <div class="scan-key-list">${rows}${alreadyRows}</div>
       <div class="modal-status" id="scanConfirmStatus" style="min-height:16px"></div>
       <div class="modal-btn-row">
         <button class="modal-btn-secondary" onclick="document.getElementById('scanConfirmModal').remove()">Cancel</button>
@@ -2003,19 +2023,21 @@ function showScanConfirmModal(detected, folderName) {
 async function saveScanedKeys(detected) {
   const statusEl = document.getElementById("scanConfirmStatus");
   const saved = [], failed = [];
-  for (let i = 0; i < detected.length; i++) {
+  // Only iterate new (non-already-set) keys — those are the ones with checkboxes
+  const newKeys = detected.filter(k => !k.alreadySet);
+  for (let i = 0; i < newKeys.length; i++) {
     const cb = document.getElementById(`scanKey_${i}`);
     if (!cb || !cb.checked) continue;
     try {
       const r = await fetch("/api/keys", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ key: detected[i].value }),
+        body: JSON.stringify({ key: newKeys[i].value }),
       });
       const d = await r.json();
       if (r.ok) saved.push(d.label);
-      else failed.push(detected[i].label);
-    } catch { failed.push(detected[i].label); }
+      else failed.push(newKeys[i].label);
+    } catch { failed.push(newKeys[i].label); }
   }
   if (saved.length) {
     statusEl.textContent = `✓ Saved: ${saved.join(", ")}`;

@@ -1228,14 +1228,41 @@ supabase.from("api_usage").insert({
     if (!folderPath) { res.writeHead(400, cors); res.end(JSON.stringify({ error: "folderPath required" })); return; }
     const envVars = readRepoEnv(folderPath);
     const folderName = path.basename(folderPath);
-    const detected = [];
-    for (const [k, v] of Object.entries(envVars)) {
-      if (!v) continue;
-      const match = detectKey(v);
-      if (match) {
-        detected.push({ envKey: match.envKey, label: match.label, provider: match.provider || null, llm: match.llm || null, value: v });
+
+    // Read what's already configured in api-dash so we can skip those
+    const alreadySet = new Set();
+    const localEnv = path.join(__dirname, ".env.local");
+    try {
+      const lines = fs.readFileSync(localEnv, "utf8").split("\n");
+      for (const line of lines) {
+        const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.+)/);
+        if (m && m[2].trim()) alreadySet.add(m[1]);
       }
+    } catch {}
+
+    const seenValues = new Set();
+    const seenEnvKeys = new Set();
+    const detected = [];
+
+    for (const [, v] of Object.entries(envVars)) {
+      if (!v || seenValues.has(v)) continue;
+      const match = detectKey(v);
+      if (!match) continue;
+      if (seenEnvKeys.has(match.envKey)) continue;
+      seenValues.add(v);
+      seenEnvKeys.add(match.envKey);
+      const purpose = match.envKey.includes("ADMIN") ? "billing tile" : (match.llm ? "co-pilot + billing" : "billing tile");
+      detected.push({
+        envKey: match.envKey,
+        label: match.label,
+        purpose,
+        provider: match.provider || null,
+        llm: match.llm || null,
+        value: v,
+        alreadySet: alreadySet.has(match.envKey),
+      });
     }
+
     res.writeHead(200, cors);
     res.end(JSON.stringify({ folderName, folderPath, detected }));
     return;

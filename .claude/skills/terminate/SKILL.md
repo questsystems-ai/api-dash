@@ -24,6 +24,8 @@ Run these in parallel:
 
 ### Step 2: Write the handoff report
 
+Before writing, read `scripts/output/session-log.md` (last 150 lines) to capture any concepts/decisions logged mid-session. Incorporate these into the handoff — this ensures crash recovery in the next session even if the log is all that survived.
+
 Write to `scripts/output/session-handoff.md` (create the directory if needed). Keep it under 80 lines. Include:
 
 1. **The Product** — one paragraph: what this app/service does, who it's for
