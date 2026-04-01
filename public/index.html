@@ -1587,6 +1587,7 @@
 </style>
 </head>
 <body>
+<input type="file" id="gcpFileInput" accept=".csv" style="display:none" onchange="gcpHandleFile(this)">
 
 <div class="header">
   <div class="header-left">
@@ -1697,13 +1698,92 @@ function confirmOverride(provider) {
   document.getElementById("throttle-override-modal")?.remove();
 }
 
+// ── Google Cloud CSV import ───────────────────────────────────────────────────
+let gcpCsvData = JSON.parse(localStorage.getItem("gcpCsvData") || "null");
+
+function gcpHandleFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const lines = e.target.result.split("\n").map(l => l.trim()).filter(Boolean);
+    const services = [];
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(",");
+      const name = (cols[0] || "").trim();
+      if (!name) continue; // subtotal/tax/total rows have empty first col
+      const cost = parseFloat(cols[6]); // "Subtotal ($)" column
+      if (isNaN(cost)) continue;
+      services.push({ name, cost });
+    }
+    const total = services.reduce((s, r) => s + r.cost, 0);
+    const dateMatch = file.name.match(/(\d{4}-\d{2}-\d{2})[^0-9]+(\d{4}-\d{2}-\d{2})/);
+    const dateRange = dateMatch ? `${dateMatch[1]} — ${dateMatch[2]}` : null;
+    gcpCsvData = { importedAt: new Date().toISOString().slice(0, 10), fileName: file.name, dateRange, total, services };
+    localStorage.setItem("gcpCsvData", JSON.stringify(gcpCsvData));
+    input.value = "";
+    render();
+  };
+  reader.readAsText(file);
+}
+
+function renderGcpCard() {
+  const d = gcpCsvData;
+  const color = "#4285f4";
+  const total = d ? d.total : 0;
+  const budget = providerBudgets["google-cloud"] || 200;
+
+  const importBtn = `<button onclick="document.getElementById('gcpFileInput').click()"
+    style="background:none;border:1px dashed ${color};border-radius:4px;color:${color};
+    font-family:'IBM Plex Mono',monospace;font-size:10px;cursor:pointer;padding:4px 10px;
+    text-transform:uppercase;letter-spacing:1px;margin-top:4px;width:100%">
+    ${d ? "↑ update csv" : "↑ import billing csv"}
+  </button>`;
+
+  const serviceRows = d
+    ? d.services.map(s =>
+        `<div class="model-row">
+          <span class="model-name">${s.name}</span>
+          <span class="model-cost" style="color:${color}">$${s.cost.toFixed(2)}</span>
+        </div>`).join("")
+    : `<div class="model-row"><span class="model-name" style="opacity:0.5">no data — import a CSV from GCP Console → Billing → Reports</span></div>`;
+
+  const meta = d
+    ? `<div class="model-row" style="opacity:0.4;font-size:0.75rem;margin-top:4px">
+        <span class="model-name">${d.dateRange || "date range unknown"}</span>
+        <span class="model-cost">imported ${d.importedAt}</span>
+      </div>`
+    : "";
+
+  return `
+    <div class="gauge-card">
+      <button class="dismiss-btn" title="Hide tile" onclick="hideProvider('google-cloud')">×</button>
+      <div class="card-header">
+        <div class="running-total">$${total.toFixed(2)} total</div>
+        <div class="provider-name" style="color:${color}">Google Cloud</div>
+      </div>
+      <div class="provider-cost" style="color:${gaugeColor(total, budget)}">$${total.toFixed(2)}</div>
+      ${createGaugeSVG(total, budget, color)}
+      <div class="budget-input-row">
+        <span>budget $/mo</span>
+        <input type="number" class="budget-input" value="${budget.toFixed(0)}"
+          oninput="setProviderBudget('google-cloud', this.value)" min="1" step="5">
+      </div>
+      <div class="model-list">
+        ${serviceRows}
+        ${meta}
+        ${importBtn}
+      </div>
+    </div>`;
+}
+
 // ── Period selector ───────────────────────────────────────────────────────────
 const PERIODS = ["today", "week", "month", "all"];
 const PERIOD_LABELS = { today: "Today ›", week: "This Week ›", month: "This Month ›", all: "All Time ›" };
 const providerPeriods = JSON.parse(localStorage.getItem("providerPeriods") || "{}");
 
 function cyclePeriod(id) {
-  const cur = providerPeriods[id] || "month";
+  const cur = providerPeriods[id] || "week";
   providerPeriods[id] = PERIODS[(PERIODS.indexOf(cur) + 1) % PERIODS.length];
   localStorage.setItem("providerPeriods", JSON.stringify(providerPeriods));
   render();
@@ -2828,7 +2908,7 @@ function renderGaugeCard(p) {
 
   const pBudgetMonthly = providerBudgets[p.id] || Math.max(p.totalCost * 2, 10);
   const hasExplicitBudget = !!providerBudgets[p.id];
-  const period = providerPeriods[p.id] || "month";
+  const period = providerPeriods[p.id] || "week";
   const cycleCost = periodCost(p.daily, p.totalCost, period);
   const pBudget = period === "today" ? (hasExplicitBudget ? pBudgetMonthly / 30 : 10)
                 : period === "week"  ? (hasExplicitBudget ? pBudgetMonthly / 4.33 : 50)
@@ -2941,10 +3021,12 @@ function render() {
     .map(p => renderGaugeCard(p))
     .join("");
 
-  const standaloneCards = visibleProviders
-    .filter(p => !p.isGoogleProject)
-    .map(p => renderGaugeCard(p))
-    .join("");
+  const gcpCard = hiddenProviders.has("google-cloud") ? "" : renderGcpCard();
+
+  const standaloneCards = [
+    ...visibleProviders.filter(p => !p.isGoogleProject).map(p => renderGaugeCard(p)),
+    gcpCard
+  ].join("");
 
   document.getElementById("app").innerHTML = `
     <div class="grand-total-bar">

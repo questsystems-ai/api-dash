@@ -11,13 +11,13 @@
     "dev": "node server.js --open",
     "app": "electron .",
     "make-icon": "node scripts/make-icon.js",
-    "build": "electron-builder --win --x64"
+    "build": "set CSC_IDENTITY_AUTO_DISCOVERY=false && electron-builder --win --x64"
   },
   "build": {
     "appId": "com.api-dash.app",
     "productName": "api-dash",
     "win": {
-      "target": "nsis",
+      "target": "dir",
       "icon": "assets/icon.ico"
     },
     "files": [
@@ -40,6 +40,7 @@
     "usage",
     "monitor"
   ],
+  "author": "Aaron",
   "license": "MIT",
   "dependencies": {
     "@supabase/supabase-js": "^2.100.0",

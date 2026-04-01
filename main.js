@@ -2,26 +2,40 @@
 // Spawns server.js, creates a BrowserWindow, system tray, and global hotkey
 
 const { app, BrowserWindow, Tray, Menu, globalShortcut, nativeImage, shell } = require("electron");
-const { spawn } = require("child_process");
 const path = require("path");
 const http = require("http");
+const dotenv = require("dotenv");
+
+// Disable GPU — avoids "Access is denied" GPU cache errors on Windows
+app.disableHardwareAcceleration();
+app.commandLine.appendSwitch("disable-gpu");
+app.commandLine.appendSwitch("disable-software-rasterizer");
+
+// Store Electron cache/userData in AppData, not next to the exe
+app.setPath("userData", path.join(app.getPath("appData"), "api-dash"));
+
+// Load .env.local before requiring server.js
+// In packaged exe, extraResources land in process.resourcesPath (not __dirname)
+const envDir = app.isPackaged ? process.resourcesPath : __dirname;
+dotenv.config({ path: path.join(envDir, ".env.local") });
+dotenv.config({ path: path.join(envDir, ".env") });
 
 const PORT = parseInt(process.env.PORT || "3737", 10);
 const URL  = `http://localhost:${PORT}`;
 
-let win    = null;
-let tray   = null;
-let server = null;
+let win  = null;
+let tray = null;
 
 // ── Server ────────────────────────────────────────────────────────────────────
 
 function startServer() {
-  server = spawn(process.execPath, [path.join(__dirname, "server.js")], {
-    cwd: __dirname,
-    env: process.env,
-    stdio: "inherit",
-  });
-  server.on("error", (e) => console.error("[api-dash] server error:", e.message));
+  // Run server.js in-process — works in both dev and packaged exe
+  // (spawning process.execPath would launch another Electron instance, not Node)
+  try {
+    require(path.join(__dirname, "server.js"));
+  } catch (e) {
+    console.error("[api-dash] failed to start server:", e.message);
+  }
 }
 
 function waitForServer(retries = 20) {
@@ -166,5 +180,4 @@ app.on("activate", () => {
 
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
-  if (server) server.kill();
 });
