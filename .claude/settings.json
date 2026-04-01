@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p scripts/output && python -c \"import json,sys; d=json.load(sys.stdin); open('scripts/output/session-log.md','a').write(f\\\"[$(date '+%H:%M')] [USER] {d.get('prompt','')[:300]}\\\\n\\\")\" 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python scripts/log_claude_response.py"
+          }
+        ]
+      }
+    ]
+  }
+}

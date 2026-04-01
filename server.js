@@ -50,6 +50,76 @@ const BUDGET = parseFloat(process.env.MONTHLY_BUDGET || "100");
 
 // ── Provider result cache (slow billing APIs shouldn't be hit every 60s) ──────
 const providerCache = {};
+
+// ── Throttle / runaway detection ──────────────────────────────────────────────
+const throttleState = {};
+const prevDailyTotals = {}; // providerId → today's cost at last poll
+
+function getOrInitThrottle(providerId) {
+  if (!throttleState[providerId]) {
+    throttleState[providerId] = {
+      enabled: true,
+      threshold: 2.0,
+      triggered: false,
+      paused: false,
+      overrideUntil: null,
+      reason: null,
+      ratio: null,
+      triggeredAt: null,
+    };
+  }
+  return throttleState[providerId];
+}
+
+function detectSpike(providerId, daily, prevTodayCost) {
+  const t = throttleState[providerId];
+  if (!t || !t.enabled) return null;
+
+  const today = new Date().toLocaleDateString('en-CA');
+  const todayEntry = daily.find(d => d.date === today);
+  const todayCost = todayEntry ? todayEntry.cost : 0;
+
+  // Rolling avg of last 7 complete days (exclude today — it's partial)
+  const completeDays = daily.filter(d => d.date < today).slice(-7);
+  if (completeDays.length < 2) return null; // not enough history yet
+  const rollingAvg = completeDays.reduce((s, d) => s + d.cost, 0) / completeDays.length;
+  if (rollingAvg < 0.01) return null; // ignore sub-cent averages
+
+  const threshold = t.threshold || 2.0;
+
+  // Signal 1: today's total already > threshold × rolling daily avg
+  if (todayCost > threshold * rollingAvg) {
+    const ratio = +(todayCost / rollingAvg).toFixed(1);
+    return { triggered: true, ratio, reason: `today $${todayCost.toFixed(2)} is ${ratio}× daily avg ($${rollingAvg.toFixed(2)})` };
+  }
+
+  // Signal 2: increase since last poll > 1× rolling avg (rate spike)
+  const delta = todayCost - (prevTodayCost || 0);
+  if (delta > rollingAvg && delta > 0.01) {
+    const ratio = +(delta / rollingAvg).toFixed(1);
+    return { triggered: true, ratio, reason: `+$${delta.toFixed(2)} in last 60s (${ratio}× daily avg $${rollingAvg.toFixed(2)})` };
+  }
+
+  return null;
+}
+
+function sendDesktopNotification(providerLabel, reason) {
+  console.warn(`[THROTTLE ALERT] ${providerLabel}: ${reason}`);
+  if (process.platform === "win32") {
+    // Write a temp .ps1 file to avoid cmd.exe quoting/escaping issues
+    const title = "api-dash Throttle Alert";
+    const body = `${providerLabel}: ${reason}`.replace(/'/g, "").slice(0, 200);
+    const script = `[void][Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime]
+$t = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+$t.GetElementsByTagName('text')[0].AppendChild($t.CreateTextNode('${title}')) | Out-Null
+$t.GetElementsByTagName('text')[1].AppendChild($t.CreateTextNode('${body}')) | Out-Null
+[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('Windows PowerShell').Show([Windows.UI.Notifications.ToastNotification]::new($t))
+`;
+    const tmpFile = path.join(process.env.TEMP || process.env.TMP || __dirname, "api-dash-notify.ps1");
+    fs.writeFileSync(tmpFile, script);
+    exec(`powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "${tmpFile}"`, { timeout: 8000 }, () => {});
+  }
+}
 const PROVIDER_TTL = {
   default: 60 * 60 * 1000,  // 1 hour for all providers
 };
@@ -315,7 +385,7 @@ const PROVIDERS = {
   fal: {
     label: "fal.ai",
     color: "#4ade80",
-    keys: ["FAL_KEY"],
+    keys: ["FAL_KEY", "FAL_ADMIN_KEY"],
     envHint: "FAL_KEY",
     docsUrl: "https://fal.ai/dashboard/keys",
     dashboardUrl: "https://fal.ai/dashboard/billing",
@@ -421,7 +491,14 @@ async function fetchAnthropicCosts(start, end) {
       "claude-sonnet-4-20250514": { inp: 3, out: 15 },
       "claude-haiku-4-5-20251001": { inp: 0.8, out: 4 },
     };
+    const dailyByModel = {};
+    if (usageData.length > 0) {
+      console.log(`  [anthropic] usage_report bucket keys: ${Object.keys(usageData[0]).join(', ')}`);
+    }
     for (const bucket of usageData) {
+      // usage_report may use starting_at, timestamp, or start_time — log showed which
+      const rawDate = bucket.starting_at || bucket.timestamp || bucket.start_time || "";
+      const date = rawDate ? rawDate.slice(0, 10) : null;
       for (const item of bucket.results || []) {
         const model = item.model || "unknown";
         const inputTokens = (item.uncached_input_tokens || 0) + (item.cache_read_input_tokens || 0);
@@ -429,7 +506,15 @@ async function fetchAnthropicCosts(start, end) {
         if (!byModel[model]) byModel[model] = { count: 0, cost: 0 };
         byModel[model].count += inputTokens + outputTokens;
         const p = pricing[model] || { inp: 3, out: 15 };
-        byModel[model].cost += (inputTokens * p.inp + outputTokens * p.out) / 1_000_000;
+        const cost = (inputTokens * p.inp + outputTokens * p.out) / 1_000_000;
+        byModel[model].cost += cost;
+        if (date) {
+          if (!dailyByModel[date]) dailyByModel[date] = {};
+          if (!dailyByModel[date][model]) dailyByModel[date][model] = { cost: 0, inputTokens: 0, outputTokens: 0 };
+          dailyByModel[date][model].cost += cost;
+          dailyByModel[date][model].inputTokens += inputTokens;
+          dailyByModel[date][model].outputTokens += outputTokens;
+        }
       }
     }
 
@@ -443,11 +528,37 @@ async function fetchAnthropicCosts(start, end) {
       for (const m of Object.values(byModel)) m.cost = m.cost * scale;
     }
 
+    // Normalize dailyByModel costs per day to match cost_report's authoritative daily totals
+    for (const [date, models] of Object.entries(dailyByModel)) {
+      const authoritativeDay = dailyMap[date];
+      if (!authoritativeDay) continue;
+      const dayEstimate = Object.values(models).reduce((s, m) => s + m.cost, 0);
+      if (dayEstimate > 0) {
+        const scale = authoritativeDay / dayEstimate;
+        for (const m of Object.values(models)) m.cost *= scale;
+      }
+    }
+
+    // Fill in any dates missing from dailyMap (e.g. today due to billing lag)
+    // using token-based estimates from usage_report
+    if (usageData.length > 0) {
+      for (const bucket of usageData) {
+        const date = (bucket.starting_at || bucket.timestamp || bucket.start_time || "").slice(0, 10);
+        if (!date || dailyMap[date] !== undefined) continue; // skip if cost_report already has it
+        for (const item of bucket.results || []) {
+          const p = pricing[item.model] || { inp: 3, out: 15 };
+          const inp = (item.uncached_input_tokens || 0) + (item.cache_read_input_tokens || 0);
+          const out = item.output_tokens || 0;
+          dailyMap[date] = (dailyMap[date] || 0) + (inp * p.inp + out * p.out) / 1_000_000;
+        }
+      }
+    }
+
     const daily = Object.entries(dailyMap)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, cost]) => ({ date, cost: +cost.toFixed(6) }));
 
-    return { totalCost, byModel, daily, source: "api" };
+    return { totalCost, byModel, daily, dailyByModel, source: "api" };
   } catch (e) {
     console.warn("[api-dash] Anthropic error:", e.message);
     return null;
@@ -554,6 +665,79 @@ async function fetchElevenLabsUsage(start, end) {
     };
   } catch (e) {
     console.warn("[api-dash] ElevenLabs error:", e.message);
+    return null;
+  }
+}
+
+// ── fal.ai billing API ────────────────────────────────────────────────────────
+
+async function fetchFalCosts(start, end) {
+  const key = process.env.FAL_ADMIN_KEY || process.env.FAL_KEY;
+  if (!key) return null;
+
+  try {
+    const dailyMap = {};
+    const dailyByModel = {};
+    const byModel = {};
+    let totalCost = 0;
+    let cursor = null;
+
+    do {
+      const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const params = new URLSearchParams({
+        start: start + "T00:00:00Z",
+        end: end + "T23:59:59Z",
+        timeframe: "day",
+        timezone: localTz,
+        expand: "time_series,summary",
+        limit: "50",
+      });
+      if (cursor) params.set("cursor", cursor);
+
+      const res = await fetch(`https://api.fal.ai/v1/models/usage?${params}`, {
+        headers: { Authorization: `Key ${key}` },
+      });
+      if (!res.ok) {
+        if (res.status === 403) {
+          console.warn(`  [fal] 403 — key lacks billing scope; falling back to Supabase`);
+          return fetchSupabaseCosts("fal", start, end);
+        }
+        console.warn(`  [fal] API error: ${res.status}`);
+        return null;
+      }
+      const data = await res.json();
+
+      for (const bucket of data.time_series || []) {
+        const date = (bucket.bucket || "").slice(0, 10);
+        for (const r of bucket.results || []) {
+          const cost = parseFloat(r.cost || "0");
+          totalCost += cost;
+          if (date) dailyMap[date] = (dailyMap[date] || 0) + cost;
+          const model = r.endpoint_id || "unknown";
+          if (!byModel[model]) byModel[model] = { count: 0, cost: 0 };
+          byModel[model].count += r.quantity || 1;
+          byModel[model].cost += cost;
+          if (date) {
+            if (!dailyByModel[date]) dailyByModel[date] = {};
+            if (!dailyByModel[date][model]) dailyByModel[date][model] = { cost: 0, count: 0 };
+            dailyByModel[date][model].cost += cost;
+            dailyByModel[date][model].count += r.quantity || 1;
+          }
+        }
+      }
+      cursor = data.has_more ? data.next_cursor : null;
+    } while (cursor);
+
+    if (totalCost === 0 && Object.keys(byModel).length === 0) return null;
+
+    const daily = Object.entries(dailyMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, cost]) => ({ date, cost: +cost.toFixed(6) }));
+
+    console.log(`  ✓ fal (api): $${totalCost.toFixed(4)} across ${daily.length} days`);
+    return { totalCost, byModel, daily, dailyByModel, source: "api" };
+  } catch (e) {
+    console.warn("  [fal] error:", e.message);
     return null;
   }
 }
@@ -822,7 +1006,7 @@ async function fetchAllProviders() {
     openai: () => fetchOpenAICosts(start, end),
     elevenlabs: () => fetchElevenLabsUsage(start, end),
     replicate: () => fetchReplicateCosts(start, end),
-    fal: () => fetchSupabaseCosts("fal", start, end),
+    fal: () => fetchFalCosts(start, end),
     google: () => fetchGoogleBillingCosts(start, end),
   };
 
@@ -870,6 +1054,7 @@ async function fetchAllProviders() {
       totalCost,
       byModel: data?.byModel || {},
       daily: data?.daily || [],
+      dailyByModel: data?.dailyByModel || {},
       extra: data?.extra || null,
       source: data?.source || "none",
       carbon: estimateCarbon(p, totalCost),
@@ -1011,7 +1196,63 @@ const server = http.createServer(async (req, res) => {
   // API endpoint
   if (req.url === "/api/spend") {
     res.writeHead(200, cors);
-    res.end(JSON.stringify(latestData || { providers: [], grandTotal: 0, budget: BUDGET }));
+    const base = latestData || { providers: [], grandTotal: 0, budget: BUDGET };
+    res.end(JSON.stringify({ ...base, throttle: throttleState }));
+    return;
+  }
+
+  if (req.url.startsWith("/api/throttle") && req.method === "GET") {
+    const qs = new URL(req.url, "http://x").searchParams;
+    const provider = qs.get("provider");
+    res.writeHead(200, cors);
+    if (provider) {
+      const t = throttleState[provider] || { paused: false, enabled: true };
+      res.end(JSON.stringify({ provider, paused: t.paused }));
+    } else {
+      res.end(JSON.stringify(throttleState));
+    }
+    return;
+  }
+
+  if (req.url === "/api/throttle/test" && req.method === "POST") {
+    const body = await readBody(req);
+    const { provider, ratio = 3.2 } = body;
+    if (!provider) { res.writeHead(400, cors); res.end(JSON.stringify({ error: "provider required" })); return; }
+    const t = getOrInitThrottle(provider);
+    t.triggered = true;
+    t.ratio = ratio;
+    t.reason = `TEST: today $${(ratio * 5).toFixed(2)} is ${ratio}× daily avg ($5.00)`;
+    t.triggeredAt = new Date().toISOString();
+    const label = (latestData?.providers || []).find(p => p.id === provider)?.label || provider;
+    sendDesktopNotification(label, t.reason);
+    if (latestData) broadcast({ ...latestData, throttle: throttleState });
+    res.writeHead(200, cors);
+    res.end(JSON.stringify({ ok: true, state: t }));
+    return;
+  }
+
+  if (req.url === "/api/throttle" && req.method === "POST") {
+    const body = await readBody(req);
+    const { provider, action, overrideDurationHours, enabled, threshold } = body;
+    if (!provider) { res.writeHead(400, cors); res.end(JSON.stringify({ error: "provider required" })); return; }
+
+    const t = getOrInitThrottle(provider);
+    if (action === "pause")          { t.paused = true; }
+    if (action === "resume")         { t.paused = false; t.triggered = false; t.reason = null; }
+    if (action === "dismiss")        { t.triggered = false; t.reason = null; }
+    if (action === "override") {
+      const hours = overrideDurationHours != null ? Number(overrideDurationHours) : 4;
+      t.overrideUntil = hours === -1 ? Infinity : Date.now() + hours * 3600000;
+      t.triggered = false;
+      t.paused = false;
+    }
+    if (action === "cancel-override") { t.overrideUntil = null; }
+    if (enabled !== undefined)        { t.enabled = Boolean(enabled); t.triggered = false; }
+    if (threshold !== undefined)      { t.threshold = parseFloat(threshold) || 2.0; }
+
+    // No broadcast — client updates optimistically, next poll syncs state
+    res.writeHead(200, cors);
+    res.end(JSON.stringify({ ok: true, state: t }));
     return;
   }
 
@@ -1348,9 +1589,31 @@ function broadcast(data) {
 async function refresh() {
   try {
     console.log("[api-dash] Fetching provider data...");
-    latestData = await fetchAllProviders();
+    const newData = await fetchAllProviders();
+
+    // ── Spike detection ────────────────────────────────────────────────────────
+    const today = new Date().toISOString().slice(0, 10);
+    for (const p of newData.providers) {
+      const t = getOrInitThrottle(p.id);
+      if (!t.enabled) continue;
+      if (t.overrideUntil && (t.overrideUntil === Infinity || Date.now() < t.overrideUntil)) continue;
+
+      const spike = detectSpike(p.id, p.daily || [], prevDailyTotals[p.id] || 0);
+      if (spike && !t.triggered) {
+        t.triggered = true;
+        t.reason = spike.reason;
+        t.ratio = spike.ratio;
+        t.triggeredAt = new Date().toISOString();
+        sendDesktopNotification(p.label, spike.reason);
+      }
+
+      const todayEntry = (p.daily || []).find(d => d.date === new Date().toLocaleDateString('en-CA'));
+      prevDailyTotals[p.id] = todayEntry ? todayEntry.cost : 0;
+    }
+
+    latestData = newData;
     console.log(`[api-dash] Grand total: $${latestData.grandTotal} across ${latestData.providers.length} providers`);
-    broadcast(latestData);
+    broadcast({ ...latestData, throttle: throttleState });
   } catch (e) {
     console.error("[api-dash] Refresh error:", e.message);
   }

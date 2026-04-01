@@ -295,6 +295,104 @@
     border-color: var(--text2);
   }
 
+  /* ── Period selector ────────────────────────────── */
+  .period-toggle {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    color: var(--text2);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    cursor: pointer;
+    user-select: none;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    transition: all 0.15s;
+    margin-top: 3px;
+  }
+  .period-toggle:hover {
+    color: var(--text);
+    border-color: var(--border);
+  }
+
+  /* ── Throttle controls ──────────────────────────── */
+  .throttle-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--text2);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    width: 100%;
+    justify-content: center;
+  }
+  .throttle-input {
+    width: 42px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    padding: 3px 5px;
+    text-align: right;
+    outline: none;
+    -moz-appearance: textfield;
+  }
+  .throttle-input::-webkit-outer-spin-button,
+  .throttle-input::-webkit-inner-spin-button { -webkit-appearance: none; }
+  .throttle-toggle {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text2);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    cursor: pointer;
+    padding: 2px 6px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: all 0.15s;
+  }
+  .throttle-toggle.on  { color: var(--green); border-color: var(--green); }
+  .throttle-toggle.off { color: var(--border); }
+  .throttle-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    margin-top: 5px;
+  }
+  .throttle-badge.spike {
+    color: #f59e0b;
+    background: rgba(245,158,11,0.1);
+    border: 1px solid rgba(245,158,11,0.3);
+    animation: throttle-pulse 1.5s ease-in-out infinite;
+    cursor: default;
+  }
+  .throttle-badge.spike:hover { animation: none; opacity: 1; }
+  .throttle-badge.paused {
+    color: var(--red);
+    background: rgba(248,113,113,0.1);
+    border: 1px solid rgba(248,113,113,0.3);
+    cursor: pointer;
+  }
+  .throttle-badge.override-on {
+    color: #f97316;
+    background: rgba(249,115,22,0.1);
+    border: 1px solid rgba(249,115,22,0.3);
+  }
+  @keyframes throttle-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
   /* ── Model Breakdown ────────────────────────────── */
 
   .model-list {
@@ -447,6 +545,131 @@
   .legend-swatch.dotted {
     background: repeating-linear-gradient(90deg, var(--red) 0px, var(--red) 2px, transparent 2px, transparent 5px);
   }
+
+  /* ── Day Drill Modal ────────────────────────────── */
+
+  #dayModal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    z-index: 2000;
+    align-items: center;
+    justify-content: center;
+  }
+  #dayModal.open { display: flex; }
+
+  .day-modal-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    width: min(640px, 92vw);
+    max-height: 80vh;
+    overflow-y: auto;
+    padding: 28px 28px 24px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .day-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 22px;
+  }
+
+  .day-modal-title {
+    font-size: 16px;
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .day-modal-total {
+    font-size: 22px;
+    color: var(--blue);
+    font-weight: 700;
+  }
+
+  .day-modal-close {
+    background: none;
+    border: none;
+    color: var(--text2);
+    font-size: 22px;
+    cursor: pointer;
+    padding: 0 0 0 16px;
+    line-height: 1;
+  }
+  .day-modal-close:hover { color: var(--text); }
+
+  .day-provider-row {
+    border-top: 1px solid var(--border);
+    padding: 14px 0 6px;
+  }
+
+  .day-provider-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+
+  .day-provider-name {
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .day-provider-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+  }
+
+  .day-provider-cost {
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .day-model-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+    color: var(--text2);
+    padding: 3px 0 3px 18px;
+    gap: 12px;
+  }
+
+  .day-model-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .day-model-detail {
+    color: var(--text2);
+    opacity: 0.7;
+    flex-shrink: 0;
+  }
+
+  .day-model-cost {
+    flex-shrink: 0;
+    text-align: right;
+    min-width: 60px;
+  }
+
+  .day-no-breakdown {
+    font-size: 11px;
+    color: var(--text2);
+    opacity: 0.6;
+    padding: 4px 0 4px 18px;
+  }
+
+  .chart-hit-target { cursor: pointer; }
+  .chart-hit-target:hover rect { opacity: 0.15; }
 
   /* ── Budget Bar ─────────────────────────────────── */
 
@@ -1380,6 +1603,19 @@
   <div class="loading">Fetching provider data</div>
 </div>
 
+<div id="dayModal" onclick="if(event.target===this)closeDayModal()">
+  <div class="day-modal-panel">
+    <div class="day-modal-header">
+      <div>
+        <div class="day-modal-title" id="dayModalDate"></div>
+        <div class="day-modal-total" id="dayModalTotal"></div>
+      </div>
+      <button class="day-modal-close" onclick="closeDayModal()">×</button>
+    </div>
+    <div id="dayModalBody"></div>
+  </div>
+</div>
+
 <script>
 // ── State ─────────────────────────────────────────
 
@@ -1387,6 +1623,113 @@ let data = null;
 const providerBudgets = JSON.parse(localStorage.getItem('providerBudgets') || '{}');
 const hiddenProviders = new Set(JSON.parse(localStorage.getItem('hiddenProviders') || '[]'));
 let showHidden = false;
+
+// ── Throttle state ────────────────────────────────────────────────────────────
+let throttleData = {};
+const prevTriggeredProviders = new Set();
+
+function postThrottle(provider, body) {
+  // Optimistic local update so UI responds instantly without a WebSocket re-render
+  if (!throttleData[provider]) throttleData[provider] = { enabled: true, threshold: 2.0 };
+  const t = throttleData[provider];
+  const { action, enabled, threshold, overrideDurationHours } = body;
+  if (action === "pause")           { t.paused = true; }
+  if (action === "resume")          { t.paused = false; t.triggered = false; t.reason = null; }
+  if (action === "dismiss")         { t.triggered = false; t.reason = null; }
+  if (action === "cancel-override") { t.overrideUntil = null; }
+  if (action === "override") {
+    const hours = overrideDurationHours != null ? Number(overrideDurationHours) : 4;
+    t.overrideUntil = hours === -1 ? Infinity : Date.now() + hours * 3600000;
+    t.triggered = false; t.paused = false;
+  }
+  if (enabled !== undefined)   { t.enabled = Boolean(enabled); t.triggered = false; }
+  if (threshold !== undefined) { t.threshold = parseFloat(threshold) || 2.0; }
+  render();
+
+  fetch("/api/throttle", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider, ...body }),
+  }).catch(() => {});
+}
+
+function setThrottleEnabled(provider, enabled) {
+  postThrottle(provider, { enabled });
+}
+
+function setThrottleThreshold(provider, threshold) {
+  postThrottle(provider, { threshold: parseFloat(threshold) });
+}
+
+function showOverrideModal(provider, label) {
+  const existing = document.getElementById("throttle-override-modal");
+  if (existing) existing.remove();
+  const modal = document.createElement("div");
+  modal.id = "throttle-override-modal";
+  modal.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:9999";
+  modal.innerHTML = `
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:28px;max-width:400px;width:90%;font-family:'IBM Plex Mono',monospace">
+      <div style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:8px">Override throttle — ${label}</div>
+      <div style="font-size:12px;color:var(--text2);margin-bottom:20px;line-height:1.6">Suppress spend alerts for this provider. Use when running a known large batch on an expensive model.</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;font-size:12px;color:var(--text2)">
+        <span>Duration:</span>
+        <select id="override-duration" style="background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-size:12px;padding:4px 8px;outline:none">
+          <option value="1">1 hour</option>
+          <option value="4" selected>4 hours</option>
+          <option value="8">8 hours</option>
+          <option value="-1">Until I say so</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button onclick="document.getElementById('throttle-override-modal').remove()"
+          style="background:none;border:1px solid var(--border);border-radius:6px;color:var(--text2);font-family:'IBM Plex Mono',monospace;font-size:12px;padding:8px 16px;cursor:pointer">Cancel</button>
+        <button onclick="confirmOverride('${provider}')"
+          style="background:rgba(249,115,22,0.15);border:1px solid rgba(249,115,22,0.4);border-radius:6px;color:#f97316;font-family:'IBM Plex Mono',monospace;font-size:12px;padding:8px 16px;cursor:pointer">Override — suppress alerts</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener("click", e => { if (e.target === modal) modal.remove(); });
+}
+
+function confirmOverride(provider) {
+  const hours = parseFloat(document.getElementById("override-duration").value);
+  postThrottle(provider, { action: "override", overrideDurationHours: hours });
+  document.getElementById("throttle-override-modal")?.remove();
+}
+
+// ── Period selector ───────────────────────────────────────────────────────────
+const PERIODS = ["today", "week", "month", "all"];
+const PERIOD_LABELS = { today: "Today ›", week: "This Week ›", month: "This Month ›", all: "All Time ›" };
+const providerPeriods = JSON.parse(localStorage.getItem("providerPeriods") || "{}");
+
+function cyclePeriod(id) {
+  const cur = providerPeriods[id] || "month";
+  providerPeriods[id] = PERIODS[(PERIODS.indexOf(cur) + 1) % PERIODS.length];
+  localStorage.setItem("providerPeriods", JSON.stringify(providerPeriods));
+  render();
+}
+
+function localDate(d) {
+  // Returns YYYY-MM-DD in local time (avoids UTC rollover issue for US timezones)
+  return d.toLocaleDateString('en-CA');
+}
+
+function periodCost(daily, totalCost, period) {
+  const today = localDate(new Date());
+  if (period === "all") return totalCost;
+  if (period === "today") {
+    const e = (daily || []).find(d => d.date === today);
+    return e ? e.cost : 0;
+  }
+  if (period === "week") {
+    const d = new Date(); d.setDate(d.getDate() - d.getDay() + (d.getDay() === 0 ? -6 : 1));
+    const weekStart = d.toISOString().slice(0, 10);
+    return (daily || []).filter(d => d.date >= weekStart).reduce((s, d) => s + d.cost, 0);
+  }
+  // month (default)
+  const month = today.slice(0, 7);
+  return (daily || []).filter(d => d.date.startsWith(month)).reduce((s, d) => s + d.cost, 0);
+}
 
 function hideProvider(id) {
   hiddenProviders.add(id);
@@ -1431,6 +1774,28 @@ function connect() {
   ws.onmessage = (e) => {
     try {
       data = JSON.parse(e.data);
+      throttleData = data.throttle || {};
+
+      // Browser notifications for newly triggered providers
+      for (const [pid, t] of Object.entries(throttleData)) {
+        if (t.triggered && !t.paused && !(t.overrideUntil && (t.overrideUntil === Infinity || Date.now() < t.overrideUntil))) {
+          if (!prevTriggeredProviders.has(pid)) {
+            prevTriggeredProviders.add(pid);
+            // Only notify if spike was triggered today — skip stale alerts from previous sessions
+            const triggeredToday = t.triggeredAt && localDate(new Date(t.triggeredAt)) === localDate(new Date());
+            if (triggeredToday && Notification.permission === "granted") {
+              const p = (data.providers || []).find(pr => pr.id === pid);
+              new Notification("api-dash — Spend Alert", {
+                body: `${p ? p.label : pid}: ${t.reason}`,
+                tag: `throttle-${pid}`,
+              });
+            }
+          }
+        } else {
+          prevTriggeredProviders.delete(pid);
+        }
+      }
+
       render();
       document.getElementById("lastUpdate").textContent =
         `updated ${new Date(data.fetchedAt).toLocaleTimeString()}`;
@@ -1453,12 +1818,18 @@ fetch("/api/spend")
   .then((d) => {
     if (d.providers) {
       data = d;
+      throttleData = d.throttle || {};
       render();
     }
   })
   .catch(() => {});
 
 connect();
+
+// Request browser notification permission (for throttle alerts)
+if ("Notification" in window && Notification.permission === "default") {
+  Notification.requestPermission();
+}
 
 // ── Config + first-boot ────────────────────────────
 
@@ -2282,6 +2653,9 @@ function createChart(cumulative, providers) {
       bars += `<rect x="${x}" y="${y}" width="${barW}" height="${barH}" fill="${p.color}" opacity="0.8" rx="1" />`;
       yOffset += barH;
     }
+    // Transparent full-column hit target for click
+    bars += `<rect x="${x - 1}" y="${padT}" width="${barW + 2}" height="${chartH}" fill="transparent"
+      onclick="showDayModal('${dates[i]}')" style="cursor:pointer" title="${dates[i]}" />`;
   }
 
   // X-axis labels (first, middle, last)
@@ -2346,9 +2720,11 @@ function createSpendLineChart(cumulative) {
     days.map((d, i) => `L${x(i)},${y(d.dayCost)}`).join(" ") +
     ` L${x(days.length - 1)},${y(0)} Z`;
 
-  // Small dots on each day
+  // Small dots on each day (clickable — invisible larger hit target overlaid)
   const dotsHTML = days.map((d, i) =>
-    `<circle class="spend-dot" cx="${x(i)}" cy="${y(d.dayCost)}" r="2.5" />`
+    `<circle class="spend-dot" cx="${x(i)}" cy="${y(d.dayCost)}" r="2.5" />
+     <circle cx="${x(i)}" cy="${y(d.dayCost)}" r="8" fill="transparent"
+      onclick="showDayModal('${d.date}')" style="cursor:pointer" title="${d.date}" />`
   ).join("");
 
   // Find peaks (local maxima — higher than both neighbors)
@@ -2369,11 +2745,13 @@ function createSpendLineChart(cumulative) {
     peakConnectorHTML = `<polyline class="peak-connector" points="${peakPts}" />`;
   }
 
-  // Peak dots
+  // Peak dots (clickable)
   const peakDotsHTML = peaks.map(i =>
     `<circle class="peak-dot" cx="${x(i)}" cy="${y(costs[i])}" r="4.5" />
      <text x="${x(i)}" y="${y(costs[i]) - 10}" text-anchor="middle"
-       style="font-family:'IBM Plex Mono',monospace;font-size:9px;fill:var(--red)">$${costs[i].toFixed(2)}</text>`
+       style="font-family:'IBM Plex Mono',monospace;font-size:9px;fill:var(--red)">$${costs[i].toFixed(2)}</text>
+     <circle cx="${x(i)}" cy="${y(costs[i])}" r="12" fill="transparent"
+       onclick="showDayModal('${days[i].date}')" style="cursor:pointer" title="${days[i].date}" />`
   ).join("");
 
   // 7-day running average
@@ -2448,15 +2826,60 @@ function renderGaugeCard(p) {
     : `${modelRows || '<div class="model-row"><span class="model-name">no model data</span><span class="model-cost">—</span></div>'}
        ${extraInfo}`;
 
-  const pBudget = providerBudgets[p.id] || Math.max(p.totalCost * 2, 10);
-  const thisMonth = new Date().toISOString().slice(0, 7);
-  const cycleCost = (p.daily || [])
-    .filter(d => d.date.startsWith(thisMonth))
-    .reduce((sum, d) => sum + (d.cost || 0), 0);
+  const pBudgetMonthly = providerBudgets[p.id] || Math.max(p.totalCost * 2, 10);
+  const hasExplicitBudget = !!providerBudgets[p.id];
+  const period = providerPeriods[p.id] || "month";
+  const cycleCost = periodCost(p.daily, p.totalCost, period);
+  const pBudget = period === "today" ? (hasExplicitBudget ? pBudgetMonthly / 30 : 10)
+                : period === "week"  ? (hasExplicitBudget ? pBudgetMonthly / 4.33 : 50)
+                : period === "all"   ? Math.max(p.totalCost * 1.5, pBudgetMonthly)
+                : pBudgetMonthly;
 
   const dismissBtn = p.isGoogleProject
     ? `<button class="dismiss-btn" title="Remove project" onclick="if(confirm('Remove all ${p.projectSlug} tiles?'))deleteGoogleProject('${p.projectSlug}')">🗑</button>`
     : `<button class="dismiss-btn" title="Hide tile" onclick="hideProvider('${p.id}')">×</button>`;
+
+  // ── Throttle badge + controls ───────────────────────────────────────────────
+  const t = (throttleData || {})[p.id] || { enabled: true, threshold: 2.0 };
+  const isOverrideActive = t.overrideUntil && (t.overrideUntil === Infinity || Date.now() < t.overrideUntil);
+  const overrideRemaining = isOverrideActive && t.overrideUntil !== Infinity
+    ? (() => {
+        const ms = t.overrideUntil - Date.now();
+        const h = Math.floor(ms / 3600000);
+        const m = Math.floor((ms % 3600000) / 60000);
+        return h > 0 ? `${h}h ${m}m` : `${m}m`;
+      })()
+    : null;
+
+  let throttleBadge = "";
+  if (t.enabled) {
+    if (t.paused) {
+      throttleBadge = `<div class="throttle-badge paused" onclick="postThrottle('${p.id}', {action:'resume'})" title="Click to resume">⏸ paused — click to resume</div>`;
+    } else if (isOverrideActive) {
+      const timeStr = t.overrideUntil === Infinity ? "∞" : overrideRemaining;
+      throttleBadge = `<div class="throttle-badge override-on">⚠ override: ${timeStr} <span onclick="postThrottle('${p.id}', {action:'cancel-override'})" style="cursor:pointer;margin-left:3px;opacity:0.7">×</span></div>`;
+    } else if (t.triggered) {
+      throttleBadge = `<div class="throttle-badge spike" title="${t.reason || 'Spend spike detected'}">⚠ spike: ${t.ratio}× avg <span onclick="event.stopPropagation();postThrottle('${p.id}', {action:'dismiss'})" style="cursor:pointer;margin-left:3px;opacity:0.7">×</span></div>`;
+    }
+  }
+
+  const overrideBtn = (t.enabled && t.triggered && !t.paused && !isOverrideActive)
+    ? `<button class="throttle-toggle" style="color:#f97316;border-color:rgba(249,115,22,0.4)" onclick="showOverrideModal('${p.id}', '${p.label.replace(/'/g, "\\'")}')">override</button>`
+    : "";
+  const pauseBtn = (t.enabled && t.triggered && !t.paused && !isOverrideActive)
+    ? `<button class="throttle-toggle" style="color:var(--red);border-color:rgba(248,113,113,0.4)" onclick="postThrottle('${p.id}', {action:'pause'})">pause</button>`
+    : "";
+
+  const throttleSection = `
+    <div class="throttle-row">
+      <span>throttle ×</span>
+      <input type="number" class="throttle-input" value="${(t.threshold || 2.0).toFixed(1)}"
+        oninput="setThrottleThreshold('${p.id}', this.value)" min="0.5" step="0.5" ${!t.enabled ? 'disabled style="opacity:0.4"' : ''}>
+      <button class="throttle-toggle ${t.enabled ? 'on' : 'off'}"
+        onclick="setThrottleEnabled('${p.id}', ${!t.enabled})">${t.enabled ? 'on' : 'off'}</button>
+      ${pauseBtn}${overrideBtn}
+    </div>
+    ${throttleBadge}`;
 
   return `
     <div class="gauge-card">
@@ -2465,13 +2888,15 @@ function renderGaugeCard(p) {
         <div class="running-total">$${p.totalCost.toFixed(2)} total</div>
         <div class="provider-name" style="color:${p.color}">${p.label}</div>
       </div>
+      <div class="period-toggle" onclick="cyclePeriod('${p.id}')" title="Click to change time period">${PERIOD_LABELS[period]}</div>
       <div class="provider-cost" style="color:${gaugeColor(cycleCost, pBudget)}">$${cycleCost.toFixed(2)}</div>
       ${createGaugeSVG(cycleCost, pBudget, p.color)}
       <div class="budget-input-row">
-        <span>budget $</span>
-        <input type="number" class="budget-input" value="${pBudget.toFixed(0)}"
+        <span>budget $/mo</span>
+        <input type="number" class="budget-input" value="${pBudgetMonthly.toFixed(0)}"
           oninput="setProviderBudget('${p.id}', this.value)" min="1" step="5">
       </div>
+      ${throttleSection}
       <div class="model-list">
         ${bodyContent}
       </div>
@@ -2638,6 +3063,81 @@ function render() {
     ` : ""}
   `;
 }
+
+// ── Day drill-down modal ──────────────────────────
+
+function fmtTokens(n) {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M tok`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(0)}K tok`;
+  return `${n} tok`;
+}
+
+function showDayModal(date) {
+  if (!data || !data.providers) return;
+
+  let dayTotal = 0;
+  const rows = [];
+
+  for (const p of data.providers) {
+    const dayEntry = (p.daily || []).find(d => d.date === date);
+    if (!dayEntry || dayEntry.cost < 0.000001) continue;
+    dayTotal += dayEntry.cost;
+
+    const dbm = (p.dailyByModel || {})[date];
+    let modelHTML = '';
+
+    if (dbm && Object.keys(dbm).length > 0) {
+      const sorted = Object.entries(dbm).sort(([, a], [, b]) => b.cost - a.cost);
+      modelHTML = sorted.map(([model, m]) => {
+        const short = model.length > 38 ? model.slice(0, 36) + '…' : model;
+        let detail = '';
+        if (m.inputTokens !== undefined) {
+          detail = fmtTokens(m.inputTokens + m.outputTokens);
+        } else if (m.count !== undefined && m.count > 0) {
+          detail = `${m.count.toLocaleString()} calls`;
+        }
+        return `<div class="day-model-row">
+          <span class="day-model-name" title="${model}">${short}</span>
+          ${detail ? `<span class="day-model-detail">${detail}</span>` : ''}
+          <span class="day-model-cost" style="color:${p.color}">$${m.cost.toFixed(4)}</span>
+        </div>`;
+      }).join('');
+    } else {
+      modelHTML = `<div class="day-no-breakdown">no per-model breakdown available</div>`;
+    }
+
+    rows.push(`<div class="day-provider-row">
+      <div class="day-provider-header">
+        <span class="day-provider-name">
+          <span class="day-provider-dot" style="background:${p.color}"></span>
+          ${p.label}
+        </span>
+        <span class="day-provider-cost" style="color:${p.color}">$${dayEntry.cost.toFixed(4)}</span>
+      </div>
+      ${modelHTML}
+    </div>`);
+  }
+
+  if (rows.length === 0) {
+    rows.push(`<div style="color:var(--text2);font-size:13px;padding:20px 0;text-align:center">No spend data for this date</div>`);
+  }
+
+  const [y, m, d] = date.split('-');
+  const label = new Date(date + 'T12:00:00Z').toLocaleDateString('en-US', { weekday: 'short', month: 'long', day: 'numeric', year: 'numeric' });
+
+  document.getElementById('dayModalDate').textContent = label;
+  document.getElementById('dayModalTotal').textContent = `$${dayTotal.toFixed(2)} total`;
+  document.getElementById('dayModalBody').innerHTML = rows.join('');
+  document.getElementById('dayModal').classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeDayModal() {
+  document.getElementById('dayModal').classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDayModal(); });
 </script>
 </body>
 </html>

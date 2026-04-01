@@ -3,3 +3,8 @@ node_modules/
 .env.local
 google-projects.json
 *.bak
+dist/
+/output/
+.claude/settings.local.json
+scripts/output/session-handoff*.md
+scripts/output/anthropic-support-email.txt

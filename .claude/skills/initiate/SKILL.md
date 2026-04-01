@@ -8,27 +8,11 @@ user-invocable: true
 
 You are starting a new session. Run through these steps IN ORDER to get fully oriented, then present a concise briefing to the user.
 
-### Step 1: Initialize memory if needed
+### Step 1: Read the handoff report
 
-Check if the memory index exists at `C:\Users\aaron\.claude\projects\C--Users-aaron-Documents-a-i-rons-projects-api-dash\memory\MEMORY.md`.
+Glob `scripts/output/session-handoff-*.md` for timestamped handoffs, and also check for legacy `scripts/output/session-handoff.md`. If only one file exists, read it — it is the most direct summary from the previous session. If multiple exist (concurrent sessions), list them with timestamps and ask: "Found [N] handoffs — continue from most recent, a specific one, or combine?" Then read the chosen file(s). If "combine", merge the pending items.
 
-If it does NOT exist, create it now:
-
-```markdown
-# Memory Index
-
-No memories saved yet.
-```
-
-This prevents the "found no memories" failure on first run.
-
-### Step 2: Read the handoff report
-
-Check if `scripts/output/session-handoff.md` exists. If it does, read it FIRST — this is the most direct summary from the previous session.
-
-If the handoff does NOT exist (crash or first session), check `scripts/output/session-log.md` instead — this is the running mid-session log and may contain concepts/decisions from a crashed session. Read the last 100 lines if it exists.
-
-### Step 3: Check uncommitted changes
+### Step 2: Check uncommitted changes
 
 Run `git status` and `git diff --stat`.
 
@@ -39,29 +23,17 @@ Identify:
 
 If there are changes beyond what the handoff report describes, note them — they may represent work done after the report was written.
 
-### Step 4: Recent commits
+### Step 3: Recent commits
 
 Run `git log --oneline -10`.
 
 Summarize what the last few commits accomplished. Note the gap between committed work and uncommitted work.
 
-### Step 5: Check memory
+### Step 4: Check memory
 
-Read the memory index and scan for any memories that seem relevant to what's pending. Read the most important ones (especially feedback and project memories). Don't read all files — just the ones that matter for what's next.
+Read the memory index (`MEMORY.md` in the project's memory directory) and scan for any memories that seem relevant to what's pending. Read the most important ones (especially feedback and project memories). Don't read all files — just the ones that matter for what's next.
 
-### Step 6: Start session log
-
-Append a session-start marker to `scripts/output/session-log.md` (create it if it doesn't exist):
-
-```
----
-## Session started: [today's date + time]
-Handoff found: [yes/no]
-Session log recovered: [yes/no — did we read prior log for crash recovery?]
----
-```
-
-### Step 7: Verify cost-aware mode
+### Step 5: Verify cost-aware mode
 
 Check that you are running as **Sonnet** (not Opus). If you detect you are Opus, warn the user immediately:
 
@@ -74,7 +46,47 @@ If running as Sonnet, confirm briefly: `✅ Running as Sonnet (cost-aware mode a
 
 Read the cost-aware skill (`.claude/skills/cost-aware/SKILL.md`) to load the escalation protocol. All subagents launched this session must use `model: "sonnet"` or `model: "haiku"` unless an explicit Opus escalation is triggered.
 
-### Step 8: Present the briefing
+### Step 6: Reconstruct the active problem
+
+**Always run this step**, even if the handoff looks clean. This is the crash-recovery backstop.
+
+**6a: JSONL crash detection (run first)**
+
+Check whether the most recent Claude transcript for this repo is newer than the most recent handoff file. If so, a session ended without `/terminate`.
+
+```bash
+# Derive repo name from current folder (e.g. romantasy-v1, api-dash, etc.)
+REPO=$(basename "$PWD")
+JSONL=$(ls -t "/c/Users/aaron/.claude/projects/C--Users-aaron-Documents-a-i-rons-projects-${REPO}/"*.jsonl 2>/dev/null | head -1)
+HANDOFF=$(ls -t scripts/output/session-handoff*.md 2>/dev/null | head -1)
+```
+
+If `$JSONL` is newer than `$HANDOFF` (or no handoff exists), extract the tail of the transcript:
+
+```bash
+tail -c 15000 "$JSONL" | grep -ao '"text":"[^"]\{30,\}' | sed 's/"text":"//; s/\\n/\n/g' | tail -40
+```
+
+Summarize the last exchange: what the user was asking, what I had just responded, and what was about to happen next. Show this as a **Recovered Session** block in the briefing.
+
+If no crash is detected (handoff is newer than JSONL), skip silently.
+
+**6b: Git diff analysis**
+
+Look at the most recently touched code to infer what problem was actively being solved:
+
+1. Run `git diff HEAD --stat` to identify the most-changed files
+2. For the top 2-3 most modified files, run `git diff HEAD -- <file> | head -120` to read the actual changes
+3. Check the most recent copilot log: `ls -t copilot-logs/ | head -3`, then `tail -80` on the newest one
+
+From this, synthesize:
+- **What was being built or fixed** (the feature or bug)
+- **What state it was in** (complete, mid-implementation, or broken)
+- **What the likely next action was** (the thing the user would have typed next)
+
+If the handoff already covers this clearly, you can be brief here. If the session crashed with no clean handoff, this becomes the primary recovery signal.
+
+### Step 7: Present the briefing
 
 Output a concise briefing in this format:
 
@@ -88,7 +100,7 @@ Output a concise briefing in this format:
 [One line — what this is, from handoff or CLAUDE.md]
 
 ### Last Session
-[What was done, from handoff report or session log]
+[What was done, from handoff report]
 
 ### Uncommitted Changes
 [If any beyond what handoff describes]
@@ -99,36 +111,14 @@ Output a concise briefing in this format:
 ### Key Reminders
 [Any feedback memories that apply — budget discipline, git workflow, etc.]
 
+### Recovered Session (if crash detected)
+[Last exchange before crash: user intent + my last response + likely next action. Only shown if JSONL is newer than handoff.]
+
+### Active Problem
+[What git diffs + logs reveal was being worked on — feature/bug, completion state, likely next action. Always show this section.]
+
 ### Ready
 [Suggestions for what to pick up, or "Ready for instructions."]
 ```
 
 Keep it tight. The user wants to glance at this and know exactly where things stand.
-
----
-
-## Mid-Session Logging Protocol
-
-**This is critical.** You must append to `scripts/output/session-log.md` throughout the session whenever:
-
-- A new concept, term, or feature name is introduced
-- A product decision is made
-- The user describes a goal, preference, or direction
-- You agree on an approach or architecture
-- Anything happens that would be lost in a crash
-
-Format each entry as:
-```
-[HH:MM] [TYPE] content
-```
-
-Types: `CONCEPT`, `DECISION`, `GOAL`, `FEEDBACK`, `NOTE`
-
-Examples:
-```
-[14:32] [CONCEPT] "repo tracking" — any repo with Supabase gets per-provider dial tiles auto-discovered from api_usage table
-[14:35] [DECISION] "Add Google Project" renamed to "Add Repo" — not Google-specific
-[14:40] [FEEDBACK] User wants admin keys labeled clearly as "billing tile" not hidden
-```
-
-**Do not wait for the user to ask.** Log proactively as the conversation unfolds. This log is crash insurance.

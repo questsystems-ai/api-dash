@@ -26,7 +26,7 @@ Run these in parallel:
 
 Before writing, read `scripts/output/session-log.md` (last 150 lines) to capture any concepts/decisions logged mid-session. Incorporate these into the handoff — this ensures crash recovery in the next session even if the log is all that survived.
 
-Write to `scripts/output/session-handoff.md` (create the directory if needed). Keep it under 80 lines. Include:
+Write a **timestamped** handoff file: `scripts/output/session-handoff-YYYYMMDD-HHMM.md` (e.g. `session-handoff-20260331-1430.md`). Use today's date and current time. Create the directory if needed. Keep it under 80 lines. Include:
 
 1. **The Product** — one paragraph: what this app/service does, who it's for
 2. **Stack** — one line: framework, language, DB, key APIs/services
@@ -52,7 +52,7 @@ Output a brief summary:
 ## Session Complete
 
 **Committed:** [yes/no — commit hash if yes]
-**Handoff:** scripts/output/session-handoff.md
+**Handoff:** scripts/output/session-handoff-YYYYMMDD-HHMM.md
 **Key takeaway:** [one sentence — what was accomplished or decided]
 
 Ready to close. Next session: run `/initiate` to pick up where we left off.

@@ -2,13 +2,34 @@
   "name": "api-dash",
   "version": "0.1.0",
   "description": "Standalone API spend dashboard with radial gauges — monitor Anthropic, OpenAI, fal.ai, and more",
-  "main": "server.js",
+  "main": "main.js",
   "bin": {
     "api-dash": "./server.js"
   },
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js --open"
+    "dev": "node server.js --open",
+    "app": "electron .",
+    "make-icon": "node scripts/make-icon.js",
+    "build": "electron-builder --win --x64"
+  },
+  "build": {
+    "appId": "com.api-dash.app",
+    "productName": "api-dash",
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    },
+    "files": [
+      "main.js",
+      "server.js",
+      "public/**",
+      "assets/**",
+      "package.json"
+    ],
+    "extraResources": [
+      ".env.local"
+    ]
   },
   "keywords": [
     "api",
@@ -25,5 +46,9 @@
     "dotenv": "^16.4.5",
     "jsonwebtoken": "^9.0.3",
     "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "electron": "^41.0.4",
+    "electron-builder": "^26.8.1"
   }
 }
