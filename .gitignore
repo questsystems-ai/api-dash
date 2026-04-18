@@ -5,11 +5,10 @@ google-projects.json
 *.bak
 dist/
 /output/
-.claude/settings.local.json
-scripts/output/session-handoff*.md
-scripts/output/anthropic-support-email.txt
-
-# Demo pipeline — generated files, not source
-scripts/demo/audio/
-scripts/demo/video_raw/
-scripts/demo/output/
+.claude/
+scripts/output/
+scripts/demo/
+scripts/log_claude_response.py
+CLAUDE.md
+ELECTRON-BUILD.md
+ROMANTASY_LOGGING.md
