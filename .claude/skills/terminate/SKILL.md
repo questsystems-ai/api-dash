@@ -19,14 +19,14 @@ Suggest a commit message covering the session's work and ask the user to commit 
 ### Step 1: Gather state
 
 Run these in parallel:
-- `git status` and `git diff --stat` — find uncommitted work
 - `git log --oneline -5` — recent commits
+- `git status` — confirm current state after any commit
 
 ### Step 2: Write the handoff report
 
-Before writing, read `scripts/output/session-log.md` (last 150 lines) to capture any concepts/decisions logged mid-session. Incorporate these into the handoff — this ensures crash recovery in the next session even if the log is all that survived.
-
 Write a **timestamped** handoff file: `scripts/output/session-handoff-YYYYMMDD-HHMM.md` (e.g. `session-handoff-20260331-1430.md`). Use today's date and current time. Create the directory if needed. Keep it under 80 lines. Include:
+
+**Settled decisions** (names chosen, acronyms selected, options picked): log these explicitly in Key decisions as `[Thing]: chosen value` — e.g. `[Acronym]: PULSE = Portable Unified Lightweight Scalable Engine`. These are the facts most likely to be asked about in future sessions and least likely to survive as only a memory.
 
 1. **The Product** — one paragraph: what this app/service does, who it's for
 2. **Stack** — one line: framework, language, DB, key APIs/services

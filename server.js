@@ -5,8 +5,61 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const { exec } = require("child_process");
 const { WebSocketServer } = require("ws");
+
+// ── Config + SQLite ───────────────────────────────────────────────────────────
+
+const CONFIG_FILE = path.join(os.homedir(), ".api-dash", "config.json");
+
+function loadConfig() {
+  try { return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8")); }
+  catch { return null; }
+}
+
+function saveConfig(cfg) {
+  const dir = path.dirname(CONFIG_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2));
+}
+
+let Database = null;
+try { Database = require("better-sqlite3"); } catch { console.warn("  [sqlite] better-sqlite3 not available — run npm install"); }
+
+let db = null;
+
+const SQLITE_SCHEMA = `
+  CREATE TABLE IF NOT EXISTS api_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL,
+    model TEXT,
+    cost REAL DEFAULT 0,
+    input_units INTEGER DEFAULT 0,
+    output_units INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now')),
+    project_slug TEXT
+  )
+`;
+
+function initSQLite(dataFolder) {
+  if (!Database) return null;
+  try {
+    if (!fs.existsSync(dataFolder)) fs.mkdirSync(dataFolder, { recursive: true });
+    const dbPath = path.join(dataFolder, "spend.db");
+    db = new Database(dbPath);
+    db.exec(SQLITE_SCHEMA);
+    console.log(`  ✓ SQLite: ${dbPath}`);
+    return dbPath;
+  } catch (e) {
+    console.warn("  [sqlite] init failed:", e.message);
+    return null;
+  }
+}
+
+// Init SQLite immediately if config already exists (returning users)
+const _cfg = loadConfig();
+if (_cfg?.dataFolder) initSQLite(_cfg.dataFolder);
 
 function pickFolderDialog() {
   return new Promise((resolve) => {
@@ -588,7 +641,11 @@ async function fetchOpenAICosts(start, end) {
       const res = await fetch(`https://api.openai.com/v1/organization/costs?${params}`, {
         headers: { Authorization: `Bearer ${adminKey}` },
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        console.warn(`  [openai] costs API ${res.status}: ${errText.slice(0, 200)}`);
+        return null;
+      }
       const data = await res.json();
 
       for (const bucket of data.data || []) {
@@ -606,8 +663,12 @@ async function fetchOpenAICosts(start, end) {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, cost]) => ({ date, cost: +cost.toFixed(6) }));
 
+    if (totalCost === 0 && daily.length === 0) {
+      console.warn("  [openai] costs API returned 0 records — check OPENAI_ADMIN_KEY has admin:billing scope");
+    }
     return { totalCost, byModel: {}, daily, source: "api" };
-  } catch {
+  } catch (e) {
+    console.warn("  [openai] fetch error:", e.message);
     return null;
   }
 }
@@ -833,6 +894,54 @@ async function fetchSupabaseCosts(provider, start, end, clientOverride = null) {
 }
 
 
+// ── SQLite cost reader (local data folder or per-project spend.db) ────────────
+
+function fetchSQLiteCosts(provider, start, end, dbPath = null) {
+  if (!Database) return null;
+  try {
+    let targetDb = db;
+    if (dbPath) {
+      targetDb = new Database(dbPath, { readonly: true });
+      targetDb.exec(SQLITE_SCHEMA); // ensure table exists in external db
+    }
+    if (!targetDb) return null;
+
+    const rows = targetDb.prepare(
+      `SELECT model, cost, input_units, output_units, created_at
+       FROM api_usage
+       WHERE provider = ? AND created_at >= ? AND created_at <= ?
+       ORDER BY created_at ASC`
+    ).all(provider, start + "T00:00:00Z", end + "T23:59:59.999Z");
+
+    if (rows.length === 0) return null;
+
+    const byModel = {};
+    const dailyMap = {};
+    let totalCost = 0;
+
+    for (const r of rows) {
+      const cost = parseFloat(r.cost || 0);
+      const model = r.model || "unknown";
+      totalCost += cost;
+      if (!byModel[model]) byModel[model] = { count: 0, cost: 0 };
+      byModel[model].count += 1;
+      byModel[model].cost += cost;
+      const date = (r.created_at || "").slice(0, 10);
+      if (date) dailyMap[date] = (dailyMap[date] || 0) + cost;
+    }
+
+    const daily = Object.entries(dailyMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, cost]) => ({ date, cost: +cost.toFixed(4) }));
+
+    console.log(`  ✓ ${provider} (sqlite): $${totalCost.toFixed(2)} from ${rows.length} records`);
+    return { totalCost, byModel, daily, source: "sqlite" };
+  } catch (e) {
+    console.warn(`  [sqlite] ${provider} error:`, e.message);
+    return null;
+  }
+}
+
 // ── Google Cloud Billing API (service account JWT auth) ──────────────────────
 
 const jwt = require("jsonwebtoken");
@@ -881,8 +990,9 @@ async function getGoogleAccessToken() {
 
 async function fetchGoogleBillingCosts(start, end) {
   // Google Cloud has no public REST API that returns actual spend data.
-  // Costs are sourced from the Supabase api_usage table, where romantasy-v1
-  // and other apps log Gemini API calls with provider = "google".
+  // Try local SQLite first (zero-config), then Supabase (legacy/cloud).
+  const sqliteResult = fetchSQLiteCosts("google", start, end);
+  if (sqliteResult) return sqliteResult;
   return await fetchSupabaseCosts("google", start, end);
 }
 
@@ -1079,6 +1189,53 @@ async function fetchAllProviders() {
 
   const googleProjects = loadGoogleProjects();
   await Promise.all(googleProjects.map(async (project) => {
+    // ── SQLite project (local spend.db) ──────────────────────────────────────
+    if (project.sqlitePath) {
+      const discoverKey = `gp_${project.slug}_providers`;
+      let knownProviders = getCached(discoverKey);
+      if (!knownProviders) {
+        try {
+          if (Database) {
+            const tmpDb = new Database(project.sqlitePath, { readonly: true });
+            const rows = tmpDb.prepare(
+              `SELECT DISTINCT provider FROM api_usage WHERE created_at >= ?`
+            ).all(start + "T00:00:00Z");
+            knownProviders = rows.map(r => r.provider).filter(Boolean);
+          }
+        } catch {}
+        if (!knownProviders?.length) knownProviders = ["google"];
+        setCache(discoverKey, knownProviders);
+      }
+
+      for (const provider of knownProviders.filter(p => !SUPABASE_SKIP.has(p))) {
+        const cacheKey = `gp_${project.slug}_${provider}`;
+        let data = getCached(cacheKey);
+        if (!data) {
+          data = fetchSQLiteCosts(provider, start, end, project.sqlitePath);
+          if (!data) data = { totalCost: 0, byModel: {}, daily: [], source: "sqlite" };
+          setCache(cacheKey, data);
+        }
+        const meta = SUPABASE_PROVIDER_META[provider] || { label: provider, color: "#888" };
+        providers.push({
+          id: `gp_${project.slug}_${provider}`,
+          label: `${project.title} / ${meta.label}`,
+          color: meta.color,
+          totalCost: data.totalCost,
+          byModel: data.byModel || {},
+          daily: data.daily || [],
+          extra: null,
+          source: data.source || "sqlite",
+          carbon: estimateCarbon(provider, data.totalCost),
+          noBillingApi: false,
+          dashboardUrl: null,
+          isGoogleProject: true,
+          projectSlug: project.slug,
+        });
+      }
+      return;
+    }
+
+    // ── Supabase project (legacy / cloud) ─────────────────────────────────────
     if (!project.supabaseUrl || !project.supabaseKey) return;
     const projectClient = createClient(project.supabaseUrl, project.supabaseKey);
 
@@ -1197,7 +1354,18 @@ const server = http.createServer(async (req, res) => {
   if (req.url === "/api/spend") {
     res.writeHead(200, cors);
     const base = latestData || { providers: [], grandTotal: 0, budget: BUDGET };
-    res.end(JSON.stringify({ ...base, throttle: throttleState }));
+    res.end(JSON.stringify({ ...base, throttle: throttleState, firstLaunch: !loadConfig() }));
+    return;
+  }
+
+  if (req.url === "/api/setup" && req.method === "POST") {
+    const body = await readBody(req);
+    const { dataFolder } = body;
+    if (!dataFolder) { res.writeHead(400, cors); res.end(JSON.stringify({ error: "dataFolder required" })); return; }
+    saveConfig({ dataFolder, firstLaunchComplete: true });
+    const dbPath = initSQLite(dataFolder);
+    res.writeHead(200, cors);
+    res.end(JSON.stringify({ ok: true, dbPath }));
     return;
   }
 
@@ -1300,10 +1468,26 @@ const server = http.createServer(async (req, res) => {
 
   if (req.url === "/api/google-projects" && req.method === "POST") {
     const body = await readBody(req);
-    const { title, repoPath } = body;
+    const { title, repoPath, sqlitePath: directSqlitePath } = body;
     if (!title || !repoPath) {
       res.writeHead(400, cors);
       res.end(JSON.stringify({ error: "title and repoPath required" }));
+      return;
+    }
+
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+
+    // SQLite path: direct sqlitePath provided, or spend.db exists in repo root
+    const inferredSqlitePath = directSqlitePath || (fs.existsSync(path.join(repoPath, "spend.db")) ? path.join(repoPath, "spend.db") : null);
+    if (inferredSqlitePath) {
+      const projects = loadGoogleProjects();
+      if (!projects.find(p => p.slug === slug)) {
+        projects.push({ slug, title, repoPath, sqlitePath: inferredSqlitePath });
+        saveGoogleProjects(projects);
+        refresh();
+      }
+      res.writeHead(200, cors);
+      res.end(JSON.stringify({ status: "complete", title, slug, saved: true, type: "sqlite", sqlitePath: inferredSqlitePath }));
       return;
     }
 
@@ -1314,15 +1498,14 @@ const server = http.createServer(async (req, res) => {
     if (!sbUrl || !sbKey) {
       res.writeHead(422, cors);
       res.end(JSON.stringify({
-        error: "No Supabase credentials found",
-        hint: `Looked for SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in ${repoPath}/.env.local`,
+        error: "No Supabase credentials or spend.db found",
+        hint: `Looked for spend.db, SUPABASE_URL, and SUPABASE_SERVICE_ROLE_KEY in ${repoPath}`,
         found: Object.keys(envVars).filter(k => k.includes("SUPABASE")),
       }));
       return;
     }
 
     const status = await checkGoogleProjectStatus(sbUrl, sbKey);
-    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
 
     // Save the project whenever Supabase is reachable (complete or no_rows — tile shows $0 until data flows)
     if (status === "complete" || status === "no_rows") {
@@ -1456,6 +1639,12 @@ supabase.from("api_usage").insert({
     return;
   }
 
+  if (req.url === "/api/pick-folder-default" && req.method === "GET") {
+    res.writeHead(200, cors);
+    res.end(JSON.stringify({ path: path.join("~", ".api-dash", "data") }));
+    return;
+  }
+
   if (req.url === "/api/pick-folder" && req.method === "GET") {
     const folderPath = await pickFolderDialog();
     res.writeHead(200, cors);
@@ -1524,19 +1713,21 @@ supabase.from("api_usage").insert({
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const subPath = path.join(parentPath, entry.name);
+      const slug = entry.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+
+      // Check for local SQLite spend.db first (zero-config path)
+      const sqlitePath = path.join(subPath, "spend.db");
+      if (fs.existsSync(sqlitePath)) {
+        found.push({ name: entry.name, slug, path: subPath, sqlitePath, type: "sqlite", alreadyAdded: existing.has(slug) });
+        continue;
+      }
+
+      // Fall back to Supabase creds in .env (legacy/cloud path)
       const envVars = readRepoEnv(subPath);
       const sbUrl = envVars.SUPABASE_URL || envVars.NEXT_PUBLIC_SUPABASE_URL || "";
       const sbKey = envVars.SUPABASE_SERVICE_ROLE_KEY || "";
       if (!sbUrl || !sbKey) continue;
-      const slug = entry.name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
-      found.push({
-        name: entry.name,
-        slug,
-        path: subPath,
-        supabaseUrl: sbUrl,
-        supabaseKey: sbKey,
-        alreadyAdded: existing.has(slug),
-      });
+      found.push({ name: entry.name, slug, path: subPath, supabaseUrl: sbUrl, supabaseKey: sbKey, type: "supabase", alreadyAdded: existing.has(slug) });
     }
 
     res.writeHead(200, cors);

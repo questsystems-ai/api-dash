@@ -1587,7 +1587,7 @@
 </style>
 </head>
 <body>
-<input type="file" id="gcpFileInput" accept=".csv" style="display:none" onchange="gcpHandleFile(this)">
+<input type="file" id="csvFileInput" accept=".csv" style="display:none" onchange="csvHandleFile(this)">
 
 <div class="header">
   <div class="header-left">
@@ -1698,76 +1698,156 @@ function confirmOverride(provider) {
   document.getElementById("throttle-override-modal")?.remove();
 }
 
-// ── Google Cloud CSV import ───────────────────────────────────────────────────
-let gcpCsvData = JSON.parse(localStorage.getItem("gcpCsvData") || "null");
+// ── CSV Import tiles (provider-agnostic manual billing import) ────────────────
 
-function gcpHandleFile(input) {
+const CSV_TILE_COLORS = ["#4285f4","#ff9900","#0078d4","#cc0000","#7c3aed","#059669","#d97706","#06b6d4"];
+
+// Storage: array of { id, label, color, importedAt, fileName, dateRange, total, services }
+function loadCsvTiles() {
+  try { return JSON.parse(localStorage.getItem("csvTiles") || "[]"); }
+  catch { return []; }
+}
+function saveCsvTiles(tiles) {
+  localStorage.setItem("csvTiles", JSON.stringify(tiles));
+}
+
+// One-time migration from old gcpCsvData key
+(function migrateLegacyGcp() {
+  const legacy = localStorage.getItem("gcpCsvData");
+  if (!legacy) return;
+  const tiles = loadCsvTiles();
+  if (tiles.find(t => t.id === "google-cloud")) return; // already migrated
+  try {
+    const d = JSON.parse(legacy);
+    tiles.unshift({ id: "google-cloud", label: "Google Cloud", color: "#4285f4", ...d });
+    saveCsvTiles(tiles);
+  } catch {}
+  localStorage.removeItem("gcpCsvData");
+})();
+
+// If no tiles at all, seed the GCP tile as a prompt
+(function seedDefaultGcpTile() {
+  const tiles = loadCsvTiles();
+  if (!tiles.length) {
+    tiles.push({ id: "google-cloud", label: "Google Cloud", color: "#4285f4", importedAt: null, fileName: null, dateRange: null, total: 0, services: [] });
+    saveCsvTiles(tiles);
+  }
+})();
+
+let _csvActiveTileId = null;
+
+function csvTriggerImport(tileId) {
+  _csvActiveTileId = tileId;
+  document.getElementById("csvFileInput").click();
+}
+
+function csvHandleFile(input) {
   const file = input.files[0];
-  if (!file) return;
+  if (!file || !_csvActiveTileId) return;
+  const tileId = _csvActiveTileId;
   const reader = new FileReader();
   reader.onload = e => {
     const lines = e.target.result.split("\n").map(l => l.trim()).filter(Boolean);
-    const services = [];
-    for (let i = 1; i < lines.length; i++) {
-      const cols = lines[i].split(",");
-      const name = (cols[0] || "").trim();
-      if (!name) continue; // subtotal/tax/total rows have empty first col
-      const cost = parseFloat(cols[6]); // "Subtotal ($)" column
-      if (isNaN(cost)) continue;
-      services.push({ name, cost });
+    if (lines.length < 2) return;
+
+    // Auto-detect columns from header row
+    const headers = lines[0].split(",").map(h => h.replace(/^"|"$/g, "").toLowerCase().trim());
+    let nameCol = 0, costCol = -1;
+
+    // Find name column: "service", "description", "product", "name", else col 0
+    const nameKeywords = ["service", "description", "product", "name", "item"];
+    for (let i = 0; i < headers.length; i++) {
+      if (nameKeywords.some(k => headers[i].includes(k))) { nameCol = i; break; }
     }
+    // Find cost column: header containing "cost", "$", "amount", "subtotal", "charge"
+    const costKeywords = ["cost", "amount", "subtotal", "charge", "total", "$"];
+    for (let i = headers.length - 1; i >= 0; i--) {
+      if (costKeywords.some(k => headers[i].includes(k))) { costCol = i; break; }
+    }
+    // Fall back to last column
+    if (costCol < 0) costCol = headers.length - 1;
+
+    // Aggregate rows by name
+    const serviceMap = {};
+    for (let i = 1; i < lines.length; i++) {
+      // Handle quoted CSV fields
+      const cols = lines[i].match(/(".*?"|[^,]+)/g) || lines[i].split(",");
+      const name = (cols[nameCol] || "").replace(/^"|"$/g, "").trim();
+      if (!name) continue;
+      const cost = parseFloat((cols[costCol] || "").replace(/[^0-9.-]/g, ""));
+      if (isNaN(cost) || cost === 0) continue;
+      serviceMap[name] = (serviceMap[name] || 0) + cost;
+    }
+
+    const services = Object.entries(serviceMap)
+      .map(([name, cost]) => ({ name, cost: +cost.toFixed(6) }))
+      .sort((a, b) => b.cost - a.cost);
     const total = services.reduce((s, r) => s + r.cost, 0);
     const dateMatch = file.name.match(/(\d{4}-\d{2}-\d{2})[^0-9]+(\d{4}-\d{2}-\d{2})/);
     const dateRange = dateMatch ? `${dateMatch[1]} — ${dateMatch[2]}` : null;
-    gcpCsvData = { importedAt: new Date().toISOString().slice(0, 10), fileName: file.name, dateRange, total, services };
-    localStorage.setItem("gcpCsvData", JSON.stringify(gcpCsvData));
+
+    const tiles = loadCsvTiles();
+    const tile = tiles.find(t => t.id === tileId);
+    if (tile) {
+      tile.importedAt = new Date().toISOString().slice(0, 10);
+      tile.fileName = file.name;
+      tile.dateRange = dateRange;
+      tile.total = total;
+      tile.services = services;
+      saveCsvTiles(tiles);
+    }
     input.value = "";
+    _csvActiveTileId = null;
     render();
   };
   reader.readAsText(file);
 }
 
-function renderGcpCard() {
-  const d = gcpCsvData;
-  const color = "#4285f4";
-  const total = d ? d.total : 0;
-  const budget = providerBudgets["google-cloud"] || 200;
+function deleteCsvTile(tileId) {
+  saveCsvTiles(loadCsvTiles().filter(t => t.id !== tileId));
+  render();
+}
 
-  const importBtn = `<button onclick="document.getElementById('gcpFileInput').click()"
+function renderCsvTile(tile) {
+  const { id, label, color, total, services, dateRange, importedAt } = tile;
+  const budget = providerBudgets[id] || 200;
+  const hasData = services && services.length > 0;
+
+  const importBtn = `<button onclick="csvTriggerImport('${id}')"
     style="background:none;border:1px dashed ${color};border-radius:4px;color:${color};
     font-family:'IBM Plex Mono',monospace;font-size:10px;cursor:pointer;padding:4px 10px;
     text-transform:uppercase;letter-spacing:1px;margin-top:4px;width:100%">
-    ${d ? "↑ update csv" : "↑ import billing csv"}
+    ${hasData ? "↑ update csv" : "↑ import billing csv"}
   </button>`;
 
-  const serviceRows = d
-    ? d.services.map(s =>
+  const serviceRows = hasData
+    ? services.map(s =>
         `<div class="model-row">
           <span class="model-name">${s.name}</span>
           <span class="model-cost" style="color:${color}">$${s.cost.toFixed(2)}</span>
         </div>`).join("")
-    : `<div class="model-row"><span class="model-name" style="opacity:0.5">no data — import a CSV from GCP Console → Billing → Reports</span></div>`;
+    : `<div class="model-row"><span class="model-name" style="opacity:0.5">no data — import a billing CSV from your provider's console</span></div>`;
 
-  const meta = d
+  const meta = hasData
     ? `<div class="model-row" style="opacity:0.4;font-size:0.75rem;margin-top:4px">
-        <span class="model-name">${d.dateRange || "date range unknown"}</span>
-        <span class="model-cost">imported ${d.importedAt}</span>
+        <span class="model-name">${dateRange || "date range unknown"}</span>
+        <span class="model-cost">imported ${importedAt}</span>
       </div>`
     : "";
 
   return `
     <div class="gauge-card">
-      <button class="dismiss-btn" title="Hide tile" onclick="hideProvider('google-cloud')">×</button>
+      <button class="dismiss-btn" title="Remove tile" onclick="deleteCsvTile('${id}')">×</button>
       <div class="card-header">
-        <div class="running-total">$${total.toFixed(2)} total</div>
-        <div class="provider-name" style="color:${color}">Google Cloud</div>
+        <div class="running-total">$${(total||0).toFixed(2)} total</div>
+        <div class="provider-name" style="color:${color}">${label}</div>
       </div>
-      <div class="provider-cost" style="color:${gaugeColor(total, budget)}">$${total.toFixed(2)}</div>
-      ${createGaugeSVG(total, budget, color)}
+      <div class="provider-cost" style="color:${gaugeColor(total||0, budget)}">$${(total||0).toFixed(2)}</div>
+      ${createGaugeSVG(total||0, budget, color)}
       <div class="budget-input-row">
         <span>budget $/mo</span>
         <input type="number" class="budget-input" value="${budget.toFixed(0)}"
-          oninput="setProviderBudget('google-cloud', this.value)" min="1" step="5">
+          oninput="setProviderBudget('${id}', this.value)" min="1" step="5">
       </div>
       <div class="model-list">
         ${serviceRows}
@@ -1775,6 +1855,58 @@ function renderGcpCard() {
         ${importBtn}
       </div>
     </div>`;
+}
+
+function showAddCsvTileModal() {
+  if (document.getElementById("addCsvTileModal")) return;
+  const el = document.createElement("div");
+  el.id = "addCsvTileModal";
+  el.className = "modal-backdrop";
+  el.innerHTML = `
+    <div class="modal" style="max-width:400px">
+      <div class="modal-title">Import Billing CSV</div>
+      <div class="modal-subtitle">
+        Add a manual billing tile for any provider that doesn't have a live API —
+        AWS, Azure, Google Cloud, and others export monthly CSVs from their billing consoles.
+      </div>
+      <input class="modal-input" id="csvTileLabel" placeholder="Provider name (e.g. AWS, Azure)" maxlength="40"
+        oninput="updateCsvColorPreview()" />
+      <div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap" id="csvColorPicker">
+        ${CSV_TILE_COLORS.map((c, i) =>
+          `<button onclick="selectCsvColor('${c}')" data-color="${c}"
+            style="width:28px;height:28px;border-radius:50%;background:${c};border:${i===0?'3px solid #fff':'2px solid transparent'};cursor:pointer;padding:0"
+          ></button>`
+        ).join("")}
+      </div>
+      <button class="modal-btn" id="addCsvTileBtn" onclick="submitAddCsvTile()" style="width:100%">Create tile →</button>
+      <div class="modal-status" id="addCsvTileStatus" style="margin-top:8px"></div>
+    </div>
+  `;
+  document.body.appendChild(el);
+  el.addEventListener("click", e => { if (e.target === el) el.remove(); });
+  document.getElementById("csvTileLabel").focus();
+}
+
+let _csvSelectedColor = CSV_TILE_COLORS[0];
+
+function selectCsvColor(color) {
+  _csvSelectedColor = color;
+  document.querySelectorAll("#csvColorPicker button").forEach(btn => {
+    btn.style.border = btn.dataset.color === color ? "3px solid #fff" : "2px solid transparent";
+  });
+}
+
+function submitAddCsvTile() {
+  const label = document.getElementById("csvTileLabel").value.trim();
+  const status = document.getElementById("addCsvTileStatus");
+  if (!label) { status.textContent = "Enter a provider name."; return; }
+  const id = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + "-csv";
+  const tiles = loadCsvTiles();
+  if (tiles.find(t => t.id === id)) { status.textContent = "A tile with that name already exists."; return; }
+  tiles.push({ id, label, color: _csvSelectedColor, importedAt: null, fileName: null, dateRange: null, total: 0, services: [] });
+  saveCsvTiles(tiles);
+  document.getElementById("addCsvTileModal")?.remove();
+  render();
 }
 
 // ── Period selector ───────────────────────────────────────────────────────────
@@ -1896,6 +2028,7 @@ function connect() {
 fetch("/api/spend")
   .then((r) => r.json())
   .then((d) => {
+    if (d.firstLaunch) { showDataFolderModal(); return; }
     if (d.providers) {
       data = d;
       throttleData = d.throttle || {};
@@ -2622,6 +2755,90 @@ async function submitFirstBootKey() {
   }
 }
 
+// ── Data folder setup (first launch) ──────────────
+
+function showDataFolderModal() {
+  if (document.getElementById("dataFolderModal")) return;
+  const el = document.createElement("div");
+  el.id = "dataFolderModal";
+  el.className = "modal-backdrop";
+  el.innerHTML = `
+    <div class="modal" style="max-width:480px">
+      <div class="modal-title">Welcome to api-dash</div>
+      <div class="modal-subtitle">
+        Choose where api-dash stores its data — spend history, settings, and local cost logs.
+        You can point this at a Dropbox or cloud-synced folder to access your data from any machine.
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+        <input class="modal-input" id="dataFolderPath" style="margin-bottom:0;flex:1"
+          placeholder="~/.api-dash/data" />
+        <button class="modal-btn-secondary" style="white-space:nowrap" onclick="pickDataFolder()">Browse…</button>
+      </div>
+      <div id="dataFolderHint" style="font-size:12px;color:var(--text2);margin-bottom:20px;min-height:16px">
+        Default: your home directory — change this to a synced folder for multi-device access.
+      </div>
+      <button class="modal-btn" id="dataFolderBtn" onclick="submitDataFolder()" style="width:100%">Let's go →</button>
+      <div class="modal-status" id="dataFolderStatus" style="margin-top:8px;min-height:16px"></div>
+    </div>
+  `;
+  document.body.appendChild(el);
+  // Pre-fill with the server's suggested default via a quick fetch
+  fetch("/api/pick-folder-default")
+    .then(r => r.json())
+    .then(d => { if (d.path) document.getElementById("dataFolderPath").value = d.path; })
+    .catch(() => {});
+}
+
+async function pickDataFolder() {
+  const r = await fetch("/api/pick-folder");
+  const d = await r.json();
+  if (d.path) {
+    document.getElementById("dataFolderPath").value = d.path;
+    document.getElementById("dataFolderHint").textContent = d.path;
+  }
+}
+
+async function submitDataFolder() {
+  const folderPath = document.getElementById("dataFolderPath").value.trim();
+  const status = document.getElementById("dataFolderStatus");
+  const btn = document.getElementById("dataFolderBtn");
+  if (!folderPath) { status.textContent = "Please choose a folder first."; return; }
+  btn.disabled = true;
+  status.textContent = "setting up…";
+  try {
+    const r = await fetch("/api/setup", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ dataFolder: folderPath }),
+    });
+    const d = await r.json();
+    if (r.ok) {
+      status.textContent = "✓ Data folder ready";
+      status.style.color = "var(--green)";
+      setTimeout(() => {
+        document.getElementById("dataFolderModal")?.remove();
+        // Trigger the normal startup flow now that config exists
+        fetch("/api/spend").then(r => r.json()).then(d => {
+          data = d; throttleData = d.throttle || {}; render();
+        });
+        fetch("/api/config").then(r => r.json()).then(cfg => {
+          copilotConfig = cfg;
+          copilotProvider = cfg.llms[0]?.id || null;
+          if (cfg.firstBoot) showFirstBootModal();
+          renderCopilotToggle();
+        });
+      }, 600);
+    } else {
+      status.textContent = d.error || "Setup failed";
+      status.style.color = "var(--red)";
+      btn.disabled = false;
+    }
+  } catch {
+    status.textContent = "network error";
+    btn.disabled = false;
+  }
+}
+
 // ── Gauge helpers ─────────────────────────────────
 
 function formatCarbonDisplay(grams) {
@@ -3021,11 +3238,14 @@ function render() {
     .map(p => renderGaugeCard(p))
     .join("");
 
-  const gcpCard = hiddenProviders.has("google-cloud") ? "" : renderGcpCard();
+  const csvCards = loadCsvTiles()
+    .filter(t => !hiddenProviders.has(t.id))
+    .map(t => renderCsvTile(t))
+    .join("");
 
   const standaloneCards = [
     ...visibleProviders.filter(p => !p.isGoogleProject).map(p => renderGaugeCard(p)),
-    gcpCard
+    csvCards,
   ].join("");
 
   document.getElementById("app").innerHTML = `
@@ -3080,6 +3300,10 @@ function render() {
       <div class="add-repo-card" onclick="showAddRepoModal()">
         <div style="font-size:24px;color:var(--text2)">+</div>
         <div class="add-repo-label">Add Repo</div>
+      </div>
+      <div class="add-repo-card" onclick="showAddCsvTileModal()">
+        <div style="font-size:24px;color:var(--text2)">↑</div>
+        <div class="add-repo-label">Import CSV</div>
       </div>
 
       <div class="key-paste-card">

@@ -8,3 +8,8 @@ dist/
 .claude/settings.local.json
 scripts/output/session-handoff*.md
 scripts/output/anthropic-support-email.txt
+
+# Demo pipeline — generated files, not source
+scripts/demo/audio/
+scripts/demo/video_raw/
+scripts/demo/output/

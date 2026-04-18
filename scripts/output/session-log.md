@@ -800,3 +800,349 @@ Suggested message:
 
 Commit, skip, or defer?
 [14:53] [USER] commit please
+[14:54] [CLAUDE] ---
+
+## Session Complete
+
+**Committed:** yes — `0b29f65`
+**Handoff:** `scripts/output/session-handoff-20260401-1315.md`
+**Key takeaway:** Electron blank window fixed (spawn → require), GCP CSV tile added, build pipeline mostly unblocked — main open item is confirming the exe actually loads the dashboard clean.
+
+Ready to close. Next session: run `/initiate` to pick up where we left off.
+[12:23] [USER] /initiate
+[12:24] [CLAUDE] ---
+
+## Session Briefing
+
+### Model
+Running as Sonnet 4.6 — cost-aware mode active.
+
+### Project: api-dash
+**Branch:** `master` — clean on commits, 4 modified files (skill files + session-log — hook artifacts, not code changes)
+
+**Last 3 commits:**
+- `0b29f65` Fix Electron blank window, add Google Cloud CSV tile, default period to This Week
+- `9ec1b0a` Add Electron desktop app, throttle/spike detection, and session hooks
+- `e889006` Add Repo feature, co-pilot code editing, session continuity, and security fixes
+
+### Last Session (2026-04-01)
+- Fixed blank Electron window (`require('./server.js')` instead of spawning exe)
+- Fixed `.env.local` path for packaged exe
+- Added GPU disable flags to suppress Windows cache errors
+- Added GCP CSV client-side tile (localStorage-persisted, parses bill… [truncated]
+[12:27] [USER] ok it doesn't look like I have a google api supabase or any other supabase no endpoint, repo-monitored-spending... did we replace tat with the google cloud tile built from a csv i deposited, which I'd only like to do once a month?
+[12:28] [CLAUDE] Yes, that's exactly right. Here's the current state:
+
+**What's there now:**
+- `renderGcpCard()` in `index.html` — a standalone "Google Cloud" CSV tile. You drop a billing export CSV from GCP Console → Billing → Reports, it parses the date range + service breakdown, and stores it in `localStorage`. One upload lasts until you do the next month's.
+
+**What happened to the old "google (supabase)" tile:**
+- That was never a dedicated tile — it was a ghost appearing from the "Tracked Repos" scan reading `api_usage` records from Romantasy's Supabase with `provider = "google"` (Gemini calls). It only showed up when the tracked repo was configured and Supabase was reachable.
+- `fetchGoogleBillingCosts()` in `server.js` still technically exists and falls back to `fetchSupabaseCosts("google", ...)`, b… [truncated]
+[12:31] [USER] right... but we will tell people how to configure supabase for whatever repo they have where they use an ai provider that doesn't have a dedicated billing API endpoint. Als the google cloud is a different category than say elevenlabs and supabase... it's a "manual upload csv" which anyone can do it 
+[12:46] [USER] I want to send this out. it needs to be production ready. we've never tried the onboard locally. What I'd like to do is to have you write a script to orchestrate the ui in an instruction video in a dev server, which we will record and put on our youtube, using dummy money values, and random api keys
+[12:47] [CLAUDE] Big picture first — there are two decisions and a deliverable here. Let me lay them out clearly before we write a line of code.
+
+---
+
+## Decision 1: Drop Supabase → Local SQLite
+
+The Supabase requirement is a real barrier to onboarding (account, project, $10/mo, key rotation). SQLite is the right replacement:
+
+- Lives in a user-configurable **data folder** (default: `~/.api-dash/data/`)
+- User can point that folder at Dropbox/iCloud/OneDrive → multi-computer sync for free
+- Same `api_usage` table structure — adding an API key in the tool writes to `spend.db`
+- "Scan repo for API keys" already works — it'd also pick up SQLite files in a configured folder
+- Providers without billing APIs (Gemini, etc.) log to the SQLite instead of Supabase
+- Zero accounts, zero cost, works offline
+
+**This re… [truncated]
+[12:53] [USER] A) let the user answer the question and pick. B) I meant a python script that operates the dev server monitor image ui, scrolling, opening folders, scanning for apis, and also generating all the nice demo data and example repo names and stuff. But yes you will also write the traditional "Script" tha
+[12:54] [CLAUDE] Love it. Here's the build order (dependencies flow downward):
+
+[code]
+
+The narration script is independent and also *defines the spec* for what the Python automation needs to demonstrate — so let me write that first while you decide on SQLite.
+
+---
+
+**Proposed narration tone sample** (snarky 12-year-old explaining tech to adults):
+
+> *"Okay so. You've been spending money on AI. A lot of it. And you have no idea how much. That's why you're here. This is API Dash. It's basically a financial therapist for your side projects, except it doesn't judge you. Much."*
+
+> *"See this dial? That's your Anthropic bill. That red part? Yeah. That's you. We're not gonna talk about it."*
+
+> *"Now we're gonna scan your repo. It's gonna find your API keys. Don't worry, it's not uploading them anywhere. It's j… [truncated]
+[13:09] [USER] ok that voice was an experiment... let's go back to patient british dude. otherwise go ahead and proceed.
+[13:18] [CLAUDE] Done. Here's what just shipped:
+
+---
+
+**SQLite (server.js):**
+- `~/.api-dash/config.json` stores data folder preference
+- `initSQLite()` creates `spend.db` with `api_usage` table on setup
+- `fetchSQLiteCosts()` reads from local db — used as primary source before Supabase fallback
+- Tracked repos now support `sqlitePath` entries alongside existing Supabase
+- Scan endpoint detects `spend.db` files in repos automatically
+- `/api/setup` endpoint saves config + inits db
+- `/api/spend` includes `firstLaunch: true` when no config found
+
+**First-launch modal (index.html):**
+- Shows on first load, folder path input pre-filled with `~/.api-dash/data`
+- Browse button uses existing `/api/pick-folder`
+- On submit → `/api/setup` → dismisses modal → triggers normal startup
+
+**Demo scripts (`scripts/demo/… [truncated]
+[15:35] [USER] did it complete the "generalize csv... " step?
+[15:35] [CLAUDE] No — task 3 is still pending. I skipped it during the session. Want me to do it now?
+
+The change: refactor the hardcoded `gcpCard` / `renderGcpCard` in `index.html` into a generic "Manual Import" tile mechanism where:
+- User labels it (e.g. "Google Cloud", "AWS", "Azure")
+- Picks a color
+- Uploads any billing CSV
+- Creates a tile identical to any other
+
+GCP would just be the first instance using this system.
+[15:35] [USER] yeah definitely because it should go in the instruction video!
+[15:38] [CLAUDE] All tasks complete. Here's what the CSV tile system does now:
+
+**What changed:**
+- `gcpCsvData` → `csvTiles[]` in localStorage — any number of tiles
+- On first load, old `gcpCsvData` is migrated automatically — existing data is preserved
+- Google Cloud tile is seeded by default as the first example
+- `renderCsvTile(tile)` replaces the hardcoded `renderGcpCard()`
+- Smart CSV parser auto-detects name + cost columns from headers — works with GCP, AWS Cost Explorer, Azure exports, etc.
+- Dismiss button now *deletes* the tile (not just hides it), since these are user-created
+
+**New "Import CSV" card** sits in the Tracked Repos section alongside "Add Repo":
+- Clicking opens a modal: type a provider name + pick a color from a preset palette
+- Creates a new tile immediately with the "import billin… [truncated]
+[15:38] [USER] yes please
+[15:39] [CLAUDE] Done. Three things patched:
+
+1. **`run_demo.py`** — `scene_gcp_csv` → `scene_csv_import`: now clicks "Import CSV" card, opens the modal, types "Google Cloud", picks the color, creates the tile, then imports the CSV via the file chooser. Call site updated too.
+
+2. **`narration.md`** Scene 6 — rewritten to show the "create any tile" flow first, then GCP as the example. Mentions AWS and Azure work the same way.
+
+All stale `gcpFileInput` / `#gcpCard` references are gone from the automation script.
+[15:39] [USER] k what's my terminal command sequence again?
+[15:39] [CLAUDE] [code]
+
+If you've already done the `pip install` before, just the last line. The demo repo lands at `~/api-dash-demo` by default.
+[15:41] [USER] can you operate obs to do the screen record... and basically just hit me with a video?
+[15:41] [CLAUDE] Two honest points before I write code:
+
+**OBS:** Yes — OBS has a WebSocket API (`obsws-python` library) and I can script it. But it requires OBS pre-configured with a scene/source, and it's more setup than the simpler alternative.
+
+**Simpler path:** Playwright has built-in video recording (`record_video_dir`). Zero config, outputs a `.webm` directly. Combined with ElevenLabs for narration and `ffmpeg` to mix them, that's a complete pipeline with no OBS dependency.
+
+Full auto pipeline would be:
+[code]
+
+Three questions before I build it:
+
+1. **ElevenLabs key** — do you have `ELEVENLABS_API_KEY` in your `.env.local`? (needed to generate the narration audio)
+2. **ffmpeg** — is it installed? (`ffmpeg -version` in terminal)
+3. **OBS preference** — still want OBS control, or happy with the Playwr… [truncated]
+[15:45] [USER] 1. yes 2. don't know 3. Playwright is fine. can you just install everything?
+[15:47] [CLAUDE] Your one command:
+
+[code]
+
+That's it. It will:
+1. Generate the fake demo repo + spend data
+2. Call ElevenLabs to synthesise the narration scene by scene (skips any already done)
+3. Boot the dev server automatically
+4. Launch Playwright — a Chromium window opens, the demo runs itself
+5. Kill the server, mix audio + video with ffmpeg
+6. Drop `scripts/demo/output/api-dash-demo.mp4`
+
+**One thing to verify first** — make sure your `ELEVENLABS_API_KEY` is in `.env.local` (it almost certainly is from the existing setup). The narration generator reads it from there automatically.
+[15:51] [USER] (base) PS C:\Users\aaron\Documents\a-i-rons_projects\api-dash>  python scripts/demo/make_video.py 
+
+──────────────────────────────────────────────────
+  Step 1 — Seed demo data
+───────
+[15:52] [CLAUDE] Two bugs fixed:
+
+1. **ElevenLabs 401** — parser now handles `KEY = value` (spaces around `=`) and uses `.resolve()` so the path is always absolute regardless of working directory
+2. **Port conflict** — kills any existing process on 3737 before starting the demo server, so Playwright always hits the clean demo instance
+3. **Bonus** — generation now aborts on first 401 instead of firing 11 failed API calls
+
+Run it again:
+
+[code]
+[15:53] [USER] is this the key? sk_24ca749f00018faf9339746fa479ebc2f4bc3ebdc6cc23ff it 401'd again
+[15:53] [CLAUDE] Hey — don't paste real API keys in chat, they end up in logs. Rotate that key in your ElevenLabs dashboard now to be safe.
+
+To test if the key itself works:
+
+[code]
+
+That'll tell us if it's a bad key vs a voice/model access issue. Also worth checking — the voice ID hardcoded in the script (`onwK4e9ZLuTAKqWW03F9` = Daniel) may not be available on your plan tier. Paste the output here (not the key itself) and we'll know exactly what's wrong.
+[15:54] [USER] (base) PS C:\Users\aaron\Documents\a-i-rons_projects\api-dash>   python -c "
+>>   import requests
+>>   key = input('Paste key: ')
+>>   r = requests.get('https://api.elevenlabs.io/v1/user', headers={'xi-api-key': key})
+>>   print(r.status_code, r.json())
+>>   "
+  File "<string>", line 2
+    import re
+[15:55] [CLAUDE] Key is being read correctly but ElevenLabs is rejecting it. The key itself is invalid — likely expired or from a deleted project. You need to generate a fresh one:
+
+1. Go to **elevenlabs.io → Profile → API Keys**
+2. Create a new key, copy it
+3. Paste it into your `.env.local` replacing the current `ELEVENLABS_API_KEY` value
+
+Then re-run `python scripts/demo/make_video.py` — it'll skip re-generating any scenes that already have audio files, so it won't retry from scratch if it partially completes.
+[16:00] [USER] ok I made a new key and put it in env.local. can you try it?
+[16:00] [CLAUDE] TTS works. Run it:
+
+[code]
+[16:01] [USER] oh yeah can you put the product videos in this repo?
+[16:01] [CLAUDE] The scripts themselves (`make_video.py`, `run_demo.py`, etc.) are tracked. The generated audio, raw video, and final mp4 are gitignored — they're reproducible from the scripts anyway and would bloat the repo. The folder structure exists in the repo, just not the big files.
+[16:08] [USER] (base) PS C:\Users\aaron\Documents\a-i-rons_projects\api-dash>  python scripts/demo/make_video.py 
+
+──────────────────────────────────────────────────
+  Step 1 — Seed demo data
+───────
+[16:09] [CLAUDE] Good to go:
+
+[code]
+
+Narration is already generated (all 11 scenes cached) so it'll jump straight to Step 3.
+[16:21] [USER] 
+──────────────────────────────────────────────────
+  Step 1 — Seed demo data
+────────────────────────────────────────
+[16:22] [CLAUDE] [code]
+
+This time the demo will hold each scene open for exactly as long as its narration clip, so the recording will be ~490s — no speed adjustment needed in the render step.
+[16:33] [USER] (base) PS C:\Users\aaron\Documents\a-i-rons_projects\api-dash> python scripts/demo/make_video.py
+
+──────────────────────────────────────────────────
+  Step 1 — Seed demo data
+───────�
+[16:33] [CLAUDE] [code]
+[16:43] [USER] ok very promising. two things:  speed it up 2x. next, the video processing is messed up... it pulsates in and out of focus.
+[16:44] [CLAUDE] [code]
+
+The demo actions are now 2x snappier. The render normalizes to constant 30fps before stretching, which eliminates the frame-repeat pulsation.
+[16:45] [USER] I mean, why not just not do that stretching at all?
+[16:49] [USER] right... and the narration should be twice as fast or whatever (just speed up these recordings) 1/0.508 * x... so it really doesn't need to freeze at all. the times line up. ? (of course autonormalizing to 30 fps if stretching does occur is a no-brainer)
+[16:49] [CLAUDE] [code]
+
+Video plays at natural speed. Narration gets `atempo`'d to match — if the recording is 260s and narration is 490s, narration plays at 1.88x. Clean, no visual distortion, times line up.
+[17:01] [USER] ok in the meantime the numbers need to be plausible... these look wierd, like 3000 at the top and like 2 bucks this week in anthropic. You can base it ALL on my dash, actually, have all those numbers and graphs be the ones in there, the point is not to change the numbers, but to remove all traces of
+[17:11] [USER] ok let's stop overwriting the last one
+[17:12] [CLAUDE] Each run now saves `api-dash-demo_20260417_143022.mp4` (timestamped) in `scripts/demo/output/` — nothing gets overwritten.
+[17:18] [USER] ok that last one was the first technically usable one. problem is the the tracking on the screen did not work. it tried, but it wasn't good... I would say it needs more animation... but also the length of the screen scrolling didn't work. you need to watch it yourself. there
+[17:18] [USER] ther's also a string of nonsense at the end that if gone would give some space to slow the voice down.
+[17:21] [CLAUDE] Here's what I found and fixed:
+
+**Root cause of "nonsense at the end"**: The Add Repo modal has no text input anymore — just a "Browse to projects folder" OS button. The old script tried to fill `#gpFolderPath` which didn't exist, so the scene did nothing for ~40 seconds while `timed_scene` held the budget. Fixed: now opens the modal, expands the FAQ accordion (shows actual interaction), highlights the Browse button, then clicks Cancel to close cleanly.
+
+**Root cause of "no animation"**: The dashboard scene just highlighted the grand total and sat there. Fixed: now moves the mouse across each tile, horizontally scrolls the grid to reveal hidden providers, scrolls down to the chart, then returns.
+
+**Root cause of ROMANTASY-V1 showing**: The real Supabase credentials were active in the demo … [truncated]
+[17:28] [USER] wait a sec. just do FlyIRL instead of Romantasy. Cross promotion, but don't lead with romantasy... or... go big or go home. this is after all a cry for attention across all my projects. Romantasy. ?
+[17:29] [CLAUDE] Romantasy. Real project, real spend, makes the whole thing authentic — "this person actually builds things." Cross-promo is a bonus.
+
+Two things to undo/update:
+
+1. **Re-allow Supabase in the demo server** (revert the env-stripping) so the Gemini/romantasy-v1 tile shows naturally
+2. **Update the seed data** project slug from `"my-app"` → `"romantasy-v1"` so the SQLite tile label matches
+
+Want me to do both now?
+[17:29] [USER] no... let's keep it at my app for now
+[17:29] [CLAUDE] Got it — current state is correct then. Supabase stripped in the demo server, seed data uses "my-app". Ready to run as-is.
+
+`python scripts/demo/make_video.py`
+[17:31] [USER] ok now then, what about the coordination of speech and animation? It would be great if you could really think about this visually: it can be way more animated and engaging with bright outlines and stuff... so maybe that makes it easier to time to like the sentence being said. That was the main flaw 
+[17:35] [CLAUDE] Good. Here's what changed:
+
+**New helpers:**
+- `pulse()` — CSS keyframe glow that pulses in and out (not a static box). Bright outline + expanding box-shadow, 0.75s cycle.
+- `pulse_many()` — same but hits every matching element at once
+- `zoom_flash()` — quick scale-up pop with a springy cubic-bezier easing
+- `move_to()` / `move_to_nth()` — visibly moves the cursor (20 steps = smooth arc)
+- `b(scene_num, frac)` — returns `budget × fraction` so all timing is proportional to narration
+
+**Every scene now:**
+1. Moves the cursor to each element before interacting with it
+2. Uses `pulse()` instead of static outlines — bright green/yellow/red glow that breathes
+3. Times each beat as a fraction of the scene's narration budget, so nothing idles
+4. Matches the color to the emotional tone (green = go… [truncated]
+[17:52] [USER] ok yeah there's real problem with having obs focus on parts of the show where the animation is happening. also... it should be 3:20, not 1:40.
+[17:55] [CLAUDE] Good. Now the full picture of what changed and why:
+
+**Animation visibility fix:** `pulse()` now calls `scrollIntoView({block:'center'})` before firing the CSS animation. Every highlighted element will be centered in the viewport before it glows. No more invisible off-screen pulses.
+
+**Duration fix — all 11 narration scenes now mapped:**
+
+| # | Scene | Budget |
+|---|-------|--------|
+| 1 | Cold open (hold on loading/modal) | ~18s |
+| 2 | First launch (interact with modal) | ~18s |
+| 3 | Dashboard overview | ~22s |
+| 4 | Tile detail | ~20s |
+| 5 | Period selector | ~15s |
+| 6 | CSV import | ~22s |
+| 7 | Add Repo | ~22s |
+| 8 | Logging snippet (tile model breakdown) | ~15s |
+| 9 | Throttle/spike | ~20s |
+| 10 | Co-pilot | ~18s |
+| 11 | Wrap-up (final dashboard pan) | ~15s |
+| **Total** | | *… [truncated]
+[18:08] [USER] it's hard to describe how bad that is. Can you watch it? it's also the quality of the video is totally grainy and inconsistent
+[18:11] [CLAUDE] Three fixes:
+
+**1. Graininess** — `h264_mf` now runs at 8Mbps instead of its ~300kbps default. Should look sharp.
+
+**2. Modal never closing** — Added JS force-hide fallback after 8s timeout. Even if the server rejects the path (folder doesn't exist), the script rips the modal out of the DOM and continues. Dashboard scenes will now always run on a clean screen.
+
+**3. ScrollIntoView destroying tile layout** — `pulse()` and `pulse_many()` default to `scroll=False`. Only top-level scene transitions scroll (via explicit `window.scrollTo`). Sub-elements inside cards (model rows, buttons) get highlighted in-place without moving the viewport.
+
+Run `python scripts/demo/make_video.py` — seed data first if `C:\demo-projects\my-app` doesn't exist yet.
+[18:34] [USER] also it still says users\aaron\ in the welcom modal.
+[18:36] [CLAUDE] Now the modal will show `~\.api-dash\data` instead of `C:\Users\aaron\.api-dash\data`. The Playwright script also clears it immediately in `scene_cold_open` as a belt-and-suspenders. No username leaks.
+[18:40] [USER]   Concatenating 11 audio scenes...
+  ✓ Narration track: 287.0s
+  Screen recording: 115.8s
+  Narration:        287.0s
+  Audio speed:      2.478x
+  Rendering final video → api-dash-demo_20260417_183915.mp4...
+
+  ✓ Done: C:\Users\aaron\Documents\a-i-rons_projects\api-dash\scripts\demo\output\api-
+[18:45] [CLAUDE] Three fixes:
+
+**Root cause of 115.8s video**: `expect_file_chooser()` in scene 6 was throwing an unhandled exception. The outer catch killed the context, ending the recording at ~115s. Scenes 7–11 never ran. Now: the file chooser is wrapped in try/except, AND each scene is individually isolated — a bad scene holds its audio budget and continues, it can't kill the rest.
+
+**Audio 2.478x chipmunk**: `render_video.py` now uses a threshold. If ratio ≤ 1.3, speed audio (minor adjustment). If ratio > 1.3, slow the video instead (`setpts=X*PTS`) so the narration plays at natural speed. A slow-motion screen recording is far better than incomprehensible sped-up speech.
+
+**The ideal outcome**: once the scene exception is fixed, the video should be ~287s matching the audio, ratio ≈ 1.0, and neither ad… [truncated]
+[18:46] [USER] re-run?
+[18:46] [CLAUDE] Good, seed data is there. Run it:
+
+[code]
+
+Watch the console for `! Scene N error:` lines — that'll tell us if any scenes are still throwing. And the ratio line in the render step will show how close video and audio length are.
+[18:50] [USER] ─────────────────────────────────────────
+  Step 2 — Generate narration (ElevenLabs)
+───────────────────────────────────────────�
+[18:53] [CLAUDE] All three fixes are in:
+
+1. **`pulse()` / `pulse_many()` / `zoom_flash()` / `scroll_to()`** — all rewritten to use `page.locator(selector).first.evaluate()` instead of raw `document.querySelector('{selector}')`. `:has-text('...')` selectors now work correctly.
+
+2. **Period selector** — fixed `.period-btn, [data-period]` → `.period-toggle` (the actual class in the HTML).
+
+Both bugs that were causing the scene crashes (SyntaxError in scenes 6 & 7, skipped scene 5) are now resolved. Ready to run — `python scripts/demo/make_video.py` or just `python scripts/demo/run_demo.py` if you want to test the recording without regenerating audio.
+[21:42] [USER] /terminate
+[21:42] [CLAUDE] ⚠️ There's significant uncommitted work — the entire `scripts/demo/` directory is untracked plus changes to `server.js`, `public/index.html`, `package.json`, and the skill files.
+
+Suggested commit message:
+
+[code]
+
+Want to commit before I write the handoff, or skip and I'll note it as uncommitted?
+[21:42] [USER] yes

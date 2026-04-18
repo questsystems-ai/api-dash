@@ -50,7 +50,7 @@ Launch an Opus subagent ONLY when ALL of these are true:
 
 **NOT Opus triggers (common mistakes):**
 - "This file is long" — Sonnet handles long files fine
-- "This is important" — importance ≠ difficulty
+- "This is important" — importance != difficulty
 - "I want to be safe" — Sonnet is not less correct, just less creative at the frontier
 - Exploration or research tasks — always Sonnet or Haiku
 - Anything involving mostly reading and summarizing
@@ -63,7 +63,7 @@ When you identify Opus-grade work:
 
 **Step 1: Announce the escalation**
 ```
-⚡ OPUS ESCALATION
+OPUS ESCALATION
 Task: [one-line description]
 Reason: [which trigger from the list above]
 Estimated scope: [small/medium/large — how many files, how complex]
@@ -76,16 +76,51 @@ Use the Agent tool with `model: "opus"`. Give it a **complete, self-contained pr
 - Constraints and acceptance criteria
 - "Return your result and a brief summary of what you did"
 
+```
+Agent(
+  model: "opus",
+  description: "3-5 word task summary",
+  prompt: "Complete task description with all context..."
+)
+```
+
 **Step 3: Report the result and cost**
 When the Opus agent returns, print:
 
 ```
-✅ OPUS COMPLETE
+OPUS COMPLETE
 Task: [description]
 Tokens: [from agent result metadata]
 Est. cost: $X.XX (vs $X.XX if Sonnet — saved/spent $X.XX)
 Result: [brief summary of what Opus delivered]
 ```
+
+---
+
+### Running Session Cost Ledger
+
+Maintain a mental running tally. After any Opus call, and at session end, print:
+
+```
+SESSION COST ESTIMATE
+---
+Sonnet (main session)
+  Input:  ~XXXk tokens x $3.00/M  = $X.XX
+  Output: ~XXXk tokens x $15.00/M = $X.XX
+
+Opus escalations: N calls
+  #1 [task]: ~XXXk tokens          = $X.XX
+  #2 [task]: ~XXXk tokens          = $X.XX
+
+Sonnet subagents: N calls
+  [tasks]: ~XXXk tokens total      = $X.XX
+---
+TOTAL ESTIMATE:                     $X.XX
+If all-Opus session:               ~$X.XX
+SAVINGS:                            ~XX%
+```
+
+**Note:** Token counts are estimates based on message length and agent metadata. Exact billing comes from the Anthropic console.
 
 ---
 
@@ -103,9 +138,37 @@ Result: [brief summary of what Opus delivered]
 
 ---
 
-### Integration with Session Budget
+### Session Budget: Context Volume, Not Message Count
 
-This skill works alongside the session budget protocol:
-- **~25 message cap** still applies — restart fresh to avoid quadratic context cost
+**Message count is a bad proxy for cost.** A 3-message session that reads a large file costs more than 20 messages of strategy discussion. The real driver is **context volume** — how many tokens are in the window at each turn.
+
+**The right trigger to restart: task switching, not message count.**
+
+Each distinct task should be its own session:
+- Build a feature → session 1
+- Write a paper → session 2
+- Fix a bug → session 3
+
+Same work, fraction of the context cost. Context compounds quadratically — every message re-sends the full history.
+
+**Warning signs the context is getting expensive:**
+- You've read several large files (>200 lines each)
+- You've built something substantial (new component, new feature, full paper)
+- The task you're starting now is unrelated to what you just finished
+
+**When you see these signs:** suggest `/compact` or a fresh session before starting the next task.
+
 - **Commit often** — clean git state means next session recovers instantly
 - At session end, print the cost ledger before suggesting a restart
+- The cost ledger helps the user see exactly where their money went
+
+---
+
+### Why This Matters
+
+A typical planning/shipping session on all-Opus costs ~$5-10.
+The same session on Sonnet with 1-2 Opus escalations costs ~$1-3.
+Over a week of daily sessions, that's **$15-50 saved**.
+Over a month: **$60-200 saved**.
+
+The savings compound because most work is Sonnet-grade. The skill isn't "use the cheap model" — it's "use the right model for each task, and prove it with numbers."
