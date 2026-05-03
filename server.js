@@ -11,7 +11,20 @@ const { WebSocketServer } = require("ws");
 
 // ── Config + SQLite ───────────────────────────────────────────────────────────
 
-const CONFIG_FILE = path.join(os.homedir(), ".api-dash", "config.json");
+const CONFIG_FILE   = path.join(os.homedir(), ".api-dash", "config.json");
+const THROTTLE_FILE = path.join(os.homedir(), ".api-dash", "throttle.json");
+
+function writeThrottleFile() {
+  // Write current throttle state to disk so external processes can check it
+  // before making API calls — the circuit breaker signal file.
+  try {
+    const snapshot = {};
+    for (const [id, t] of Object.entries(throttleState)) {
+      snapshot[id] = { triggered: t.triggered, paused: t.paused, reason: t.reason, triggeredAt: t.triggeredAt };
+    }
+    fs.writeFileSync(THROTTLE_FILE, JSON.stringify(snapshot, null, 2));
+  } catch { /* non-fatal */ }
+}
 
 function loadConfig() {
   try { return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8")); }
@@ -1418,6 +1431,8 @@ const server = http.createServer(async (req, res) => {
     if (enabled !== undefined)        { t.enabled = Boolean(enabled); t.triggered = false; }
     if (threshold !== undefined)      { t.threshold = parseFloat(threshold) || 2.0; }
 
+    writeThrottleFile(); // keep signal file in sync whenever throttle state changes
+
     // No broadcast — client updates optimistically, next poll syncs state
     res.writeHead(200, cors);
     res.end(JSON.stringify({ ok: true, state: t }));
@@ -1796,6 +1811,7 @@ async function refresh() {
         t.ratio = spike.ratio;
         t.triggeredAt = new Date().toISOString();
         sendDesktopNotification(p.label, spike.reason);
+        writeThrottleFile();
       }
 
       const todayEntry = (p.daily || []).find(d => d.date === new Date().toLocaleDateString('en-CA'));

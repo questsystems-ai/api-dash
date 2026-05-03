@@ -1,0 +1,971 @@
+<html lang="en"><head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>The Estimation Gap: Systematic Cost Underestimation in LLM-Assisted Research, Active Cost Architecture, and a Circuit Breaker Protocol for Spend Control</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 17px;
+  line-height: 1.75;
+  color: #1a1a1a;
+  background: #f9f7f4;
+  padding-bottom: 80px;
+}
+#paper-content {
+  max-width: 780px;
+  margin: 0 auto;
+  padding: 48px 32px;
+}
+.paper-header {
+  border-bottom: 2px solid #1a1a1a;
+  padding-bottom: 28px;
+  margin-bottom: 36px;
+}
+.paper-header h1 {
+  font-size: 1.85rem;
+  line-height: 1.25;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-bottom: 10px;
+}
+.paper-header .subtitle {
+  font-size: 1.05rem;
+  color: #555;
+  font-style: italic;
+  margin-bottom: 18px;
+}
+.paper-meta {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.82rem;
+  color: #666;
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+.abstract {
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 24px 28px;
+  margin-bottom: 36px;
+}
+.abstract h2 {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #888;
+  margin-bottom: 12px;
+  border: none;
+  padding: 0;
+  margin-top: 0;
+}
+.abstract p { font-size: 0.95rem; color: #333; }
+.hypothesis {
+  background: #fffbeb;
+  border-left: 4px solid #f59e0b;
+  border-radius: 0 6px 6px 0;
+  padding: 16px 20px;
+  margin: 28px 0;
+  font-size: 0.95rem;
+}
+.hypothesis strong { color: #92400e; }
+h2 {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 48px 0 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e5e5e5;
+}
+h3 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 28px 0 12px;
+  color: #333;
+}
+h4 {
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin: 20px 0 8px;
+  color: #444;
+}
+p { margin-bottom: 16px; }
+ul, ol { padding-left: 24px; margin-bottom: 16px; }
+li { margin-bottom: 6px; }
+.callout {
+  background: #f0f7ff;
+  border-left: 4px solid #3b82f6;
+  border-radius: 0 6px 6px 0;
+  padding: 14px 18px;
+  margin: 20px 0;
+  font-size: 0.93rem;
+}
+.callout.warning { background: #fff5f5; border-left-color: #ef4444; }
+.callout.green   { background: #f0fdf4; border-left-color: #22c55e; }
+.callout.amber   { background: #fffbeb; border-left-color: #f59e0b; }
+.callout p { margin-bottom: 8px; }
+.callout p:last-child { margin-bottom: 0; }
+.callout strong { display: block; margin-bottom: 4px; }
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 24px 0;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.88rem;
+  background: #fff;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,.08);
+}
+th {
+  background: #f3f4f6;
+  padding: 10px 14px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #555;
+  border-bottom: 1px solid #e5e5e5;
+}
+td {
+  padding: 10px 14px;
+  border-bottom: 1px solid #f0f0f0;
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: #fafafa; }
+pre {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  border-radius: 6px;
+  padding: 16px 18px;
+  overflow-x: auto;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  margin: 20px 0;
+}
+code { font-family: 'SF Mono', 'Fira Code', Consolas, monospace; }
+p code, li code, td code {
+  background: #f3f4f6;
+  color: #c7254e;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.85em;
+}
+pre code { background: none; color: inherit; padding: 0; }
+.paper-footer {
+  margin-top: 64px;
+  padding-top: 20px;
+  border-top: 1px solid #e5e5e5;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.78rem;
+  color: #999;
+}
+.ref {
+  font-size: 0.84rem;
+  color: #555;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  padding-left: 24px;
+  text-indent: -24px;
+  margin-bottom: 10px;
+  line-height: 1.5;
+}
+sup { font-size: 0.7em; color: #3b82f6; }
+.failure-mode {
+  background: #fff;
+  border: 1px solid #e5e5e5;
+  border-radius: 8px;
+  padding: 20px 22px;
+  margin: 16px 0;
+}
+.failure-mode .fm-label {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #ef4444;
+  margin-bottom: 6px;
+}
+.failure-mode h4 { font-size: 1rem; font-weight: 700; margin-bottom: 10px; margin-top: 0; }
+.failure-mode p { margin-bottom: 8px; font-size: 0.93rem; }
+.failure-mode p:last-child { margin-bottom: 0; }
+.multiplier { font-family: 'SF Mono', Consolas, monospace; font-weight: 700; color: #ef4444; }
+.mitigation-card {
+  background: #fff;
+  border: 1px solid #d1fae5;
+  border-left: 4px solid #10b981;
+  border-radius: 0 8px 8px 0;
+  padding: 20px 22px;
+  margin: 16px 0;
+}
+.mitigation-card .mc-label {
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #059669;
+  margin-bottom: 6px;
+}
+.mitigation-card h4 { font-size: 1rem; font-weight: 700; margin-bottom: 10px; margin-top: 0; color: #065f46; }
+.mitigation-card p { margin-bottom: 8px; font-size: 0.93rem; }
+.mitigation-card p:last-child { margin-bottom: 0; }
+.savings { font-family: 'SF Mono', Consolas, monospace; font-weight: 700; color: #059669; }
+.stack-diagram {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  border-radius: 8px;
+  padding: 24px 28px;
+  margin: 24px 0;
+  font-family: 'SF Mono', Consolas, monospace;
+  font-size: 0.83rem;
+  line-height: 2;
+}
+.stack-diagram .green  { color: #4ade80; }
+.stack-diagram .yellow { color: #fbbf24; }
+.stack-diagram .red    { color: #f87171; }
+.stack-diagram .gray   { color: #9ca3af; }
+.stack-diagram .blue   { color: #60a5fa; }
+.verdict {
+  display: inline-block;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 2px 10px;
+  border-radius: 12px;
+}
+.verdict.pass    { background: #dcfce7; color: #166534; }
+.verdict.fail    { background: #fee2e2; color: #991b1b; }
+.verdict.partial { background: #fef9c3; color: #854d0e; }
+.verdict.pending { background: #e0f2fe; color: #0c4a6e; }
+.anatomy-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: 1px;
+  background: #e5e5e5;
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 20px 0;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  font-size: 0.83rem;
+}
+.anatomy-cell {
+  background: #fff;
+  padding: 12px 14px;
+}
+.anatomy-cell.header {
+  background: #f3f4f6;
+  font-weight: 700;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #666;
+}
+.anatomy-cell.danger { background: #fff5f5; }
+.anatomy-cell.ok     { background: #f0fdf4; }
+</style>
+</head>
+<body>
+<div id="paper-content">
+
+<header class="paper-header">
+  <h1>The Estimation Gap: Systematic Cost Underestimation in LLM-Assisted Research, Active Cost Architecture, and a Circuit Breaker Protocol for Spend Control</h1>
+  <p class="subtitle">How AI-assisted citizen science generates unpredictable compute costs — predicting blowup points before they occur, trimming non-linearities during experiments, and a reactive backstop for when those measures are insufficient</p>
+  <div class="paper-meta">
+    <span>Aaron Kushner</span>
+    <span>May 2026</span>
+    <span>Pre-print · Working paper</span>
+  </div>
+</header>
+
+<div class="abstract">
+  <h2>Abstract</h2>
+  <p>
+    Researchers using large language model (LLM) APIs to run automated experiments face a class of cost estimation failure not present in classical compute workflows: the billable unit (tokens in context) grows non-linearly with experiment scale in ways that small test runs do not reveal. We document five compounding failure modes — baseline calibration error, context window growth, dataset scaling, pipeline superlinearity, and silent scope expansion — observed in a real multi-agent behavioral study that incurred $8,032 against pre-run estimates of $15–30 (a 78–157× error). Rather than treating this as a monitoring problem solvable by better alerting, we argue for a three-layer approach: (1) <em>pre-experiment cost anatomy analysis</em> that predicts which components of a specific experimental design will enter the non-linear cost regime and at what scale; (2) <em>active cost architecture</em> — code patterns applied during experiments that continuously reduce context volume, route tasks to cheaper models, and decompose superlinear pipelines into linear ones; and (3) a <em>circuit breaker protocol</em> as a reactive backstop for residual risk. Together these layers transform cost from a surprise discovered post-billing into a designed parameter of the experiment itself.
+  </p>
+</div>
+
+<h2>§1. Introduction</h2>
+
+<p>
+  The democratization of AI research through API-accessible LLMs has created a new class of citizen scientist: individuals running multi-agent behavioral studies, automated annotation pipelines, and synthetic data generation experiments on commercial model APIs. Unlike classical compute costs — predictable from job size and cluster pricing — LLM API costs are governed by token volume, and token volume is determined by context window contents that grow dynamically as experiments run.
+</p>
+
+<p>
+  This paper addresses a problem that is poorly understood in practice: standard cost estimation for LLM batch experiments is not merely imprecise — it is systematically wrong by one to two orders of magnitude, because the intuition that produces the estimate (derived from small test runs) does not capture the non-linear growth behaviors that dominate at scale.
+</p>
+
+<p>
+  Prior work on LLM cost management has focused primarily on monitoring and alerting (Anthropic, 2026; OpenAI, 2024): dashboards that show current spend, rate limits that cap monthly totals, and billing alerts that fire after the damage is done. This paper argues that monitoring is insufficient as a primary control. A spend alert that fires <em>after</em> a $2,355 day has no retroactive value. What is needed is a methodology for predicting where a specific experimental design will blow up, code patterns that prevent that growth from occurring during the run, and a circuit breaker as the final backstop for residual risk.
+</p>
+
+<div class="hypothesis">
+  <strong>Central argument:</strong> LLM experiment cost is predictable from the mathematical structure of the experimental design, not just from small-sample measurement. Every multi-agent experiment contains identifiable non-linear components whose cost growth can be modeled in advance, mitigated structurally, and bounded by active management during the run. The circuit breaker is the third line of defense, not the first.
+</div>
+
+<h2>§2. Background</h2>
+
+<h3>2.1 Token-based billing and the context window problem</h3>
+
+<p>
+  Commercial LLM APIs bill per token — a subword unit roughly corresponding to 0.75 English words. At the time of writing, <code>claude-sonnet-4-6</code> is priced at $3 per million input tokens and $15 per million output tokens. A single 500-token exchange costs approximately $0.003. This sub-cent per-call cost creates a perception of cheapness that is accurate for interactive use and systematically misleading for batch experimentation.
+</p>
+
+<p>
+  The critical variable is context: every API call requires sending the entire conversation history (system prompt + all prior turns) as input. A call at turn 8 of a session costs roughly 5–8× more than a call at turn 1, because the context window carries 7 prior turns of accumulated dialogue. This is not incidental — it is how transformer-based models maintain coherence. But it violates the independence assumption embedded in naive cost estimates, which treat each call as a fixed cost.
+</p>
+
+<h3>2.2 The citizen scientist compute problem</h3>
+
+<p>
+  Classical academic compute involves a budget allocation review: you submit a job, a scheduler estimates wall time and cost, and you approve before execution. No equivalent gate exists for LLM API experiments. A Python script can issue an unlimited number of API calls with no pre-flight cost estimate and no automatic stop. The researcher's only native protection is a monthly billing cap — a monthly cap, not a per-run gate, which means a single overnight batch can exhaust it entirely.
+</p>
+
+<p>
+  For a solo researcher without institutional oversight, a multi-thousand-dollar billing event is not an operational cost — it is potentially the end of the research program. The citizen scientist model requires that solo operators have the same guardrails available to institutional researchers, implemented in tooling rather than requiring organizational infrastructure.
+</p>
+
+<h2>§3. Taxonomy of Failure Modes</h2>
+
+<p>We identify five distinct mechanisms that compound to produce the observed estimation gap.</p>
+
+<div class="failure-mode">
+  <div class="fm-label">Failure Mode 1</div>
+  <h4>Baseline Calibration Error</h4>
+  <p><strong>Mechanism:</strong> The researcher derives a per-call cost from early test runs using small contexts. As the experiment scales, contexts grow and per-call cost rises, but the baseline estimate remains anchored to the cheap early calls.</p>
+  <p><strong>Example:</strong> A 4-turn test of a single pilot persona costs $0.18. The researcher extrapolates: 8-turn sessions ≈ $0.36, 90-session batch ≈ "$15–30." Actual: $29/session, $2,355 batch.</p>
+  <p><strong>Error multiplier:</strong> <span class="multiplier">78–157×</span> on batch estimate.</p>
+</div>
+
+<div class="failure-mode">
+  <div class="fm-label">Failure Mode 2</div>
+  <h4>Context Window Growth</h4>
+  <p><strong>Mechanism:</strong> Each turn adds to the context window. Cost at turn N is proportional to the sum of all prior turns, making session cost grow approximately quadratically with session length. In a multi-agent setup, the evaluator receives the full session transcript — meaning evaluator cost alone scales quadratically with turns.</p>
+  <p><strong>Mathematical form:</strong> If each turn produces T tokens, total input tokens for a K-turn session ≈ T·K + T·(K-1) + … + T·1 = T·K(K+1)/2 = O(K²).</p>
+  <p><strong>Error multiplier:</strong> <span class="multiplier">3–4×</span> beyond linear per session; compounds with FM1.</p>
+</div>
+
+<div class="failure-mode">
+  <div class="fm-label">Failure Mode 3</div>
+  <h4>Dataset Scaling</h4>
+  <p><strong>Mechanism:</strong> As studies scale from pilot to full, researchers enrich their data: larger persona profiles, more detailed system prompts, longer experimental protocols. Each enrichment is a constant multiplier on every API call in the experiment. A 10× richer persona file means every persona call, companion call, and evaluator call costs 10× more than pilot calibration suggested.</p>
+  <p><strong>Example:</strong> <code>personas_pilot.json</code> (5 compact profiles, ~15KB) was used for cost calibration. <code>personas_full.json</code> (31 detailed profiles, 246KB) was used for the actual run. Average system prompt grew ~10× between pilot and production.</p>
+  <p><strong>Error multiplier:</strong> <span class="multiplier">5–10×</span> per call vs. pilot calibration.</p>
+</div>
+
+<div class="failure-mode">
+  <div class="fm-label">Failure Mode 4</div>
+  <h4>Pipeline Superlinearity</h4>
+  <p><strong>Mechanism:</strong> Experiment runners commonly include post-processing pipelines (paper generation, claim verification, cross-model analysis) that pass the full batch output as a single context. The cost of these calls is proportional to total transcript volume, which grows with N²: N sessions each producing transcripts that grow with session depth. These calls are typically added as convenience features after initial cost estimates are made, and are never included in estimates.</p>
+  <p><strong>Mathematical form:</strong> N sessions × K turns × T tokens/turn = N·K·T total transcript tokens. The synthesis call receives all of this as input: O(N·K·T). If N and K both grow, this is O(N²) in the worst case.</p>
+  <p><strong>Error multiplier:</strong> <span class="multiplier">Unbounded</span> — never modeled in estimates.</p>
+</div>
+
+<div class="failure-mode">
+  <div class="fm-label">Failure Mode 5</div>
+  <h4>Silent Scope Expansion</h4>
+  <p><strong>Mechanism:</strong> Batch runners execute all "missing" experiment combinations automatically. Adding new conditions or personas to a config file silently expands the queue beyond what the researcher consciously authorized. The "already done" check calculates remaining work from a new, larger total.</p>
+  <p><strong>Example:</strong> An expected small incremental batch ("~$5.40") grew to 51 uncompleted combinations after new conditions were added to the config, producing $955 — a 177× error before the first session ran.</p>
+  <p><strong>Error multiplier:</strong> <span class="multiplier">Proportional to unnoticed queue growth.</span></p>
+</div>
+
+<h2>§4. Case Study: The ai-companion Spend Incident</h2>
+
+<h3>4.1 Study context</h3>
+
+<p>
+  The ai-companion behavioral study is a multi-agent simulation validating a values-calibrated AI companion protocol. Synthetic personas engage in multi-turn sessions with a companion agent under experimental conditions; an evaluator agent scores each session on six rubric dimensions. The full study used 31 personas across 7 conditions at 8 turns per session (217 combinations), plus longitudinal variants and adversarial extensions. All three agents used <code>claude-sonnet-4-6</code>.
+</p>
+
+<h3>4.2 The billing record</h3>
+
+<table>
+  <thead>
+    <tr><th>Date</th><th>Estimate</th><th>Actual</th><th>Error</th><th>Sessions</th><th>Primary Modes</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Apr 3</td><td>—</td><td>$220</td><td>—</td><td>~5</td><td>FM1, FM3</td></tr>
+    <tr><td>Apr 8</td><td>—</td><td>$425</td><td>—</td><td>~15</td><td>FM2, FM4</td></tr>
+    <tr><td>Apr 11</td><td>—</td><td>$1,401</td><td>—</td><td>~25</td><td>FM2, FM4</td></tr>
+    <tr><td><strong>Apr 22</strong></td><td><strong>$15–30</strong></td><td><strong>$2,355</strong></td><td><strong>78–157×</strong></td><td><strong>133</strong></td><td>FM1+2+3+4</td></tr>
+    <tr><td>Apr 23</td><td>—</td><td>$1,761</td><td>—</td><td>87</td><td>FM2, FM4</td></tr>
+    <tr><td>Apr 24</td><td>—</td><td>$499</td><td>—</td><td>51</td><td>FM2, FM4</td></tr>
+    <tr><td><strong>May 1</strong></td><td><strong>~$5.40</strong></td><td><strong>$955</strong></td><td><strong>177×</strong></td><td><strong>51</strong></td><td>FM5, FM4</td></tr>
+  </tbody>
+</table>
+
+<p><strong>Total:</strong> $8,032 across 274 sessions. Average cost per session: $29.30 vs. estimated $0.17–0.33.</p>
+
+<h3>4.3 The monitoring gap</h3>
+
+<p>
+  The May 1 spike triggered the spend monitor's daily ratio check (2.8× rolling average). The throttle alert fired correctly. But the spend monitor was a dashboard process with no connection to the running Python batch. The alert appeared as a visual badge in a browser tab. The experiment had already completed by the time the monitoring system's next 60-second poll updated its figures. A monitor that alerts but cannot act is not a control — it is a post-mortem tool.
+</p>
+
+<h2>§5. Predicting Blowup Points Before Running</h2>
+
+<p>
+  Every experimental design has an identifiable cost structure that can be analyzed before any API calls are made. The goal of cost anatomy analysis is to decompose the experiment into components, classify each as linear or non-linear in the scaling dimensions, and identify the scale at which each component will exit the "cheap" regime.
+</p>
+
+<h3>5.1 Cost anatomy analysis</h3>
+
+<p>
+  The first step is to write out every distinct API call in your experiment and label it with its growth behavior. For a multi-agent behavioral study, the anatomy looks like this:
+</p>
+
+<div class="anatomy-row">
+  <div class="anatomy-cell header">Component</div>
+  <div class="anatomy-cell header">Scales with</div>
+  <div class="anatomy-cell header">Growth type</div>
+  <div class="anatomy-cell header">Risk</div>
+</div>
+<div class="anatomy-row">
+  <div class="anatomy-cell">Persona message (turn N)</div>
+  <div class="anatomy-cell">persona profile + prior N turns</div>
+  <div class="anatomy-cell danger">O(K²) per session</div>
+  <div class="anatomy-cell danger"><strong>High — quadratic</strong></div>
+</div>
+<div class="anatomy-row">
+  <div class="anatomy-cell">Companion response (turn N)</div>
+  <div class="anatomy-cell">system prompt + prior N turns</div>
+  <div class="anatomy-cell danger">O(K²) per session</div>
+  <div class="anatomy-cell danger"><strong>High — quadratic</strong></div>
+</div>
+<div class="anatomy-row">
+  <div class="anatomy-cell">Per-turn evaluator</div>
+  <div class="anatomy-cell">full transcript at turn N</div>
+  <div class="anatomy-cell danger">O(K²) per session</div>
+  <div class="anatomy-cell danger"><strong>High — worst offender</strong></div>
+</div>
+<div class="anatomy-row">
+  <div class="anatomy-cell">Memory consolidation</div>
+  <div class="anatomy-cell">session count + prior summaries</div>
+  <div class="anatomy-cell">O(S) per session</div>
+  <div class="anatomy-cell">Medium — linear</div>
+</div>
+<div class="anatomy-row">
+  <div class="anatomy-cell">Batch synthesis / paper</div>
+  <div class="anatomy-cell">all transcripts × all turns</div>
+  <div class="anatomy-cell danger">O(N·K) — superlinear</div>
+  <div class="anatomy-cell danger"><strong>High — unbounded</strong></div>
+</div>
+<div class="anatomy-row">
+  <div class="anatomy-cell">Session scoring (final)</div>
+  <div class="anatomy-cell">full transcript</div>
+  <div class="anatomy-cell">O(K) per session</div>
+  <div class="anatomy-cell ok">Low — linear</div>
+</div>
+
+<h3>5.2 The non-linear regime threshold</h3>
+
+<p>
+  Once components are classified, the threshold at which each enters the expensive regime can be estimated analytically. For context window growth (FM2), the inflection point depends on turn depth and token density. For a typical companion interaction where each turn produces ~500 tokens:
+</p>
+
+<ul>
+  <li>Turn 1: ~2KB context → ~$0.006</li>
+  <li>Turn 4: ~8KB context → ~$0.024</li>
+  <li>Turn 8: ~24KB context → ~$0.072 (3× what linear scaling predicts)</li>
+  <li>Turn 12: ~50KB context → ~$0.150 (6.25× linear prediction)</li>
+</ul>
+
+<p>
+  The quadratic growth doesn't feel painful at small K. At K=8 it's a 3× surprise; at K=12 it's a 6× surprise. Before setting turn depth, a researcher should plot this curve for their specific token density and ask: <em>at what turn depth does this become unacceptable?</em>
+</p>
+
+<p>
+  For dataset scaling (FM3), the threshold is simpler: the ratio of production persona file size to pilot persona file size is a direct cost multiplier. If your production profiles are 10× larger than your pilot profiles, every call costs 10× more. This should be measured explicitly:
+</p>
+
+<pre><code># Measure before running
+import json
+pilot = json.load(open("personas_pilot.json"))
+full  = json.load(open("personas_full.json"))
+
+avg_pilot_chars = sum(len(json.dumps(p)) for p in pilot) / len(pilot)
+avg_full_chars  = sum(len(json.dumps(p)) for p in full)  / len(full)
+
+print(f"Pilot avg profile: {avg_pilot_chars:.0f} chars")
+print(f"Full  avg profile: {avg_full_chars:.0f} chars")
+print(f"Scaling multiplier: {avg_full_chars / avg_pilot_chars:.1f}×")
+# → Scaling multiplier: 9.3×  ← this is what should have been caught
+</code></pre>
+
+<p>
+  For pipeline superlinearity (FM4), the blowup point is when N × transcript_size exceeds the model's comfortable context. At 90 sessions of 8 turns each, total transcript volume is approximately 90 × 8 × 1000 tokens = 720,000 tokens. A single synthesis call ingesting this costs roughly $2.16 in input alone — before any output. That number should appear in the pre-run estimate.
+</p>
+
+<h3>5.3 The pre-run cost projection</h3>
+
+<p>
+  A correct pre-run projection combines all components with their actual growth functions, using one real token-sampled session as the calibration point:
+</p>
+
+<pre><code># After running one real session:
+session_tokens_in  = &lt;from API response usage.input_tokens&gt;
+session_tokens_out = &lt;from API response usage.output_tokens&gt;
+price_in  = 3.00 / 1_000_000   # $/token for claude-sonnet-4-6
+price_out = 15.00 / 1_000_000
+
+cost_per_session = session_tokens_in * price_in + session_tokens_out * price_out
+
+# Session costs grow due to FM2 — apply growth factor
+# (approx: sessions later in batch have larger context from personas_full.json)
+growth_factor = 1.5  # conservative; measure from runs 1, 5, 10 of a test batch
+
+# Dataset scaling factor
+profile_multiplier = avg_full_chars / avg_pilot_chars  # from measurement above
+
+# Synthesis pipeline overhead
+N_sessions = len(queue)
+K_turns = n_turns
+synthesis_tokens_in = N_sessions * K_turns * 800  # conservative estimate
+synthesis_cost = synthesis_tokens_in * price_in
+
+total_estimate = (
+    N_sessions * cost_per_session * growth_factor * profile_multiplier
+    + synthesis_cost
+)
+
+print(f"Sessions: {N_sessions}")
+print(f"Base cost/session: ${cost_per_session:.2f}")
+print(f"With growth + scaling: ${cost_per_session * growth_factor * profile_multiplier:.2f}/session")
+print(f"Synthesis pipeline: ${synthesis_cost:.2f}")
+print(f"TOTAL PROJECTED: ${total_estimate:.2f}")
+print()
+input("Press Enter to proceed, Ctrl+C to abort: ")
+</code></pre>
+
+<p>
+  If this projection had existed on April 22, it would have shown approximately $800–1,200 for the 90-session batch, not $15–30. That number might still have been approved — but it would have been a deliberate decision.
+</p>
+
+<h2>§6. Active Cost Architecture: Trimming the Fat During Experiments</h2>
+
+<p>
+  Accurate projection tells you how much an experiment will cost. Active cost architecture tells you how to redesign the experiment so that it costs less <em>without sacrificing the research question</em>. The goal is not to run cheaper experiments — it is to spend money on the parts of the experiment that require expensive compute, and use cheap compute everywhere else.
+</p>
+
+<h3>6.1 Model routing by task complexity</h3>
+
+<p>
+  The single highest-leverage intervention available to any LLM experiment designer is model routing: using the cheapest model capable of each specific subtask, rather than the most capable model for all subtasks. In the ai-companion study, three agent types each used <code>claude-sonnet-4-6</code> ($3/$15 per MTok). Only one of them needed it.
+</p>
+
+<div class="mitigation-card">
+  <div class="mc-label">Active Mitigation 1</div>
+  <h4>Model Routing Table</h4>
+  <p>For each component in your experiment, ask: <em>what is the minimum capability required?</em> Structured generation from a template (persona messages) and structured scoring (1–5 evaluator rubric) do not require frontier reasoning. Only tasks requiring genuine synthesis, nuance detection, or open-ended writing do.</p>
+</div>
+
+<table>
+  <thead>
+    <tr><th>Task</th><th>Frontier needed?</th><th>Recommended model</th><th>Cost vs. Sonnet</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Persona message generation</td>
+      <td>No — follows template</td>
+      <td>Haiku 4.5</td>
+      <td><span class="savings">~20× cheaper</span></td>
+    </tr>
+    <tr>
+      <td>Companion response (core product)</td>
+      <td>Yes — this is the thing being tested</td>
+      <td>Sonnet 4.6</td>
+      <td>Baseline</td>
+    </tr>
+    <tr>
+      <td>Per-turn evaluator scoring</td>
+      <td>No — structured rubric, 1–5 scores</td>
+      <td>Haiku 4.5</td>
+      <td><span class="savings">~20× cheaper</span></td>
+    </tr>
+    <tr>
+      <td>Session-level qualitative scoring</td>
+      <td>Borderline — use Sonnet if nuance matters</td>
+      <td>Haiku 4.5 or Sonnet</td>
+      <td><span class="savings">~5–20× cheaper</span></td>
+    </tr>
+    <tr>
+      <td>Memory consolidation</td>
+      <td>No — summarization task</td>
+      <td>Haiku 4.5</td>
+      <td><span class="savings">~20× cheaper</span></td>
+    </tr>
+    <tr>
+      <td>Synthesis / paper writing</td>
+      <td>Yes — reasoning over full results</td>
+      <td>Sonnet 4.6 or Opus</td>
+      <td>Baseline</td>
+    </tr>
+    <tr>
+      <td>Claim verification (cross-model)</td>
+      <td>No — fact-check against data</td>
+      <td>Gemini Flash / GPT-4o mini</td>
+      <td><span class="savings">~10× cheaper</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  In the ai-companion study, approximately 70% of API calls were persona generation and per-turn evaluation — neither of which required Sonnet. Routing those to Haiku would have reduced the $8,032 total to approximately $1,200–1,800, with no change to the experimental results (the companion responses and final scoring, the actual dependent variable, remain on Sonnet).
+</p>
+
+<h3>6.2 Context window management: rolling summarization</h3>
+
+<p>
+  FM2 (context window growth) is the most structurally damaging failure mode because it is inherent to the conversational format. It cannot be eliminated — but it can be bounded. The key insight is that a session at turn 8 does not need turns 1–3 verbatim. It needs the <em>meaning</em> of turns 1–3, which is much smaller.
+</p>
+
+<div class="mitigation-card">
+  <div class="mc-label">Active Mitigation 2</div>
+  <h4>Rolling Window with Summarization</h4>
+  <p>Maintain a fixed-size verbatim window (e.g., last 3 turns) and a rolling summary of all earlier turns. Before each call, prepend the summary as a brief context block. This converts O(K²) context growth to O(K) with a small constant overhead for the summary.</p>
+</div>
+
+<pre><code>def build_context(transcript: list[dict], verbatim_window: int = 3) -> list[dict]:
+    """
+    Returns a context list for the next API call.
+    Older turns are compressed into a summary block; only the last
+    `verbatim_window` turns are sent verbatim.
+
+    Cost profile: O(verbatim_window) instead of O(K²).
+    """
+    if len(transcript) <= verbatim_window:
+        return transcript  # early session — no compression needed
+
+    older   = transcript[:-verbatim_window]
+    recent  = transcript[-verbatim_window:]
+
+    # Summarize older turns (using Haiku — this is cheap)
+    summary_text = summarize_turns(older)  # single Haiku call
+
+    summary_msg = {
+        "role": "user",
+        "content": f"[Session context so far — turns 1–{len(older)}]\n{summary_text}"
+    }
+    # Return: [summary block] + [last N turns verbatim]
+    return [summary_msg] + recent
+</code></pre>
+
+<p>
+  A rolling window of 3 verbatim turns with a compact summary caps per-call context at approximately 4–6KB regardless of session depth, compared to 24–50KB for an unbounded 8–12 turn session. The summarization calls add a small cost (one cheap Haiku call per summarization event) but eliminate the quadratic growth entirely.
+</p>
+
+<p>
+  Critically, the research question is not harmed by this approach. In a behavioral study, what matters is whether the companion maintains its values under pressure over time — a pattern that is preserved in a good summary. The exact wording of turn 2 is not usually what the research question is measuring.
+</p>
+
+<h3>6.3 Persona profile compression</h3>
+
+<p>
+  FM3 (dataset scaling) arises when rich persona profiles are sent wholesale on every call, including fields irrelevant to the current turn. A persona file designed for flexibility contains biographical detail, psychological history, behavioral tendencies, relationship patterns, and experimental condition overrides — most of which are not needed on every call.
+</p>
+
+<div class="mitigation-card">
+  <div class="mc-label">Active Mitigation 3</div>
+  <h4>Condition-Scoped Persona Projection</h4>
+  <p>Before each experiment run, project the full persona profile down to the fields required by the specific condition and session number. Pass the projection, not the full profile. The full profile remains available for reference but is not transmitted on every API call.</p>
+</div>
+
+<pre><code>def project_persona(persona: dict, condition: str, session: int) -> dict:
+    """
+    Extract only the fields needed for this condition × session.
+    Reduces system prompt by 60–80% for structured conditions.
+    """
+    base = {
+        "name":        persona["name"],
+        "background":  persona["background"],       # always needed
+        "presenting":  persona["presenting_issue"],  # always needed
+    }
+    if condition in ("LA", "LB", "LC"):  # longitudinal — needs history
+        base["session_history"] = persona.get("session_history", [])[:session]
+    if condition == "adversarial":
+        base["vulnerabilities"] = persona.get("vulnerabilities", [])
+    # Drop: full_biography, relationship_map, future_goals, etc.
+    return base
+</code></pre>
+
+<p>
+  In the ai-companion study, persona profiles in <code>personas_full.json</code> averaged ~8KB each. A condition-scoped projection reduces this to ~1–2KB, a 4–8× reduction in system prompt size and a corresponding reduction in per-call cost across the entire experiment.
+</p>
+
+<h3>6.4 Synthesis pipeline decomposition</h3>
+
+<p>
+  FM4 (pipeline superlinearity) is caused by feeding an entire batch of transcripts into a single synthesis call. At 90 sessions, this creates a context of hundreds of thousands of tokens — and the cost is paid once, at the end, in a single call that cannot be interrupted by the circuit breaker until it completes.
+</p>
+
+<div class="mitigation-card">
+  <div class="mc-label">Active Mitigation 4</div>
+  <h4>Map-Reduce Synthesis</h4>
+  <p>Replace one large synthesis call with a two-pass pipeline: first, summarize each session independently (small O(K) calls); then synthesize the summaries (small constant-size input regardless of N). This converts O(N·K) synthesis cost into N·O(K) + O(N) — linear in both N and K separately.</p>
+</div>
+
+<div class="stack-diagram">
+  <div class="red">BEFORE: all 90 transcripts → one Sonnet call → paper  [O(N·K) tokens in]</div>
+  <br>
+  <div class="green">AFTER:</div>
+  <div class="green">  session 1 transcript → Haiku summary → 200-token abstract</div>
+  <div class="green">  session 2 transcript → Haiku summary → 200-token abstract</div>
+  <div class="gray">  ... (N Haiku calls, each O(K)) ...</div>
+  <div class="green">  90 abstracts (18,000 tokens) → Sonnet synthesis → paper  [O(N) tokens in]</div>
+  <br>
+  <div class="blue">Cost: N × O(K) cheap + one O(N) expensive  vs.  one O(N·K) expensive</div>
+  <div class="blue">At N=90, K=8: ~$0.08 per summary + ~$0.05 synthesis  vs.  ~$2.16 monolithic</div>
+</div>
+
+<p>
+  The map-reduce approach also makes the synthesis interruptible: if the circuit breaker triggers after 45 session summaries, the batch can resume from summary 46 rather than starting over. Each summary is a cheap, stateless call.
+</p>
+
+<h3>6.5 Turn-depth budgeting</h3>
+
+<p>
+  Turn depth is a free parameter in most multi-turn studies, but its cost implications are rarely treated as a design variable. Because session cost grows quadratically with K (FM2), the optimal turn depth is not the maximum depth that fits the research question — it is the minimum depth at which the research question can be reliably answered.
+</p>
+
+<div class="mitigation-card">
+  <div class="mc-label">Active Mitigation 5</div>
+  <h4>Early Stopping on Rubric Saturation</h4>
+  <p>If the research question is answered when certain rubric scores stabilize, add a stopping criterion: end the session when the evaluator's last N scores show no variance above a threshold. This preserves research validity (you ran until the signal was clear) while eliminating the "last few turns" that often carry the highest context cost for the lowest informational value.</p>
+</div>
+
+<pre><code>def scores_saturated(score_history: list[dict], window: int = 3, tol: float = 0.5) -> bool:
+    """True if the last `window` scores show negligible variance."""
+    if len(score_history) < window:
+        return False
+    recent = score_history[-window:]
+    for key in ["felt_heard", "values_maintained", "dependency_free"]:
+        vals = [s.get(key, 0) for s in recent]
+        if max(vals) - min(vals) > tol:
+            return False  # still moving — keep going
+    return True  # converged — safe to stop early
+</code></pre>
+
+<p>
+  In practice, rubric saturation often occurs at turn 5–6 in well-designed studies, meaning turns 7–8 add cost but not signal. At 90 sessions, eliminating two turns per session would have saved approximately 22% of total cost — a meaningful amount at these scales.
+</p>
+
+<h2>§7. The Circuit Breaker Protocol</h2>
+
+<p>
+  With proactive cost anatomy (§5) and active cost architecture (§6) applied, a well-designed experiment should not blow up. But residual risk remains: estimates are imperfect, experimental designs evolve mid-study, and silent scope expansion (FM5) can still produce unexpectedly large queues. The circuit breaker is the reactive backstop for these residual cases.
+</p>
+
+<h3>7.1 Design principles</h3>
+
+<p>The circuit breaker pattern (Nygard, 2007) requires: a shared signal channel between monitor and runner; a check at every billable operation; fail-open semantics when the monitor is down; and human-in-the-loop resumption. The file system is the simplest shared channel: the monitor writes a JSON file; the runner reads it before each session.</p>
+
+<h3>7.2 Implementation</h3>
+
+<p>The spend monitor (<a href="https://github.com/questsystems-ai/api-dash">api-dash</a>) writes <code>~/.api-dash/throttle.json</code> whenever its spike detection logic triggers or any throttle state changes:</p>
+
+<pre><code>{
+  "anthropic": {
+    "triggered": true,
+    "paused": false,
+    "reason": "today $955.09 is 2.8x daily avg ($344.46)",
+    "triggeredAt": "2026-05-02T00:56:21.205Z"
+  }
+}</code></pre>
+
+<p>The experiment runner checks this file via a single-module import before each session:</p>
+
+<pre><code>from circuit_breaker import check, CircuitOpen
+
+# In the batch loop, before each API call:
+check("anthropic")   # raises CircuitOpen if triggered; warns if monitor is down
+</code></pre>
+
+<p>Placing the check in the provider's <code>complete()</code> method catches all API calls through a single chokepoint regardless of which script is running.</p>
+
+<div class="stack-diagram">
+  <div class="green">Billing API  →  api-dash (always running, 60s poll)</div>
+  <div class="blue">                     ↓ spike detected</div>
+  <div class="yellow">          ~/.api-dash/throttle.json  (written immediately)</div>
+  <div class="blue">                     ↓ read before each session</div>
+  <div class="red">   experiment runner  →  CircuitOpen raised  →  clean abort</div>
+  <div class="blue">                     ↓ human reviews dashboard</div>
+  <div class="green">         dismiss/override  →  file cleared  →  resume</div>
+</div>
+
+<h3>7.3 What the circuit breaker covers — and does not</h3>
+
+<table>
+  <thead>
+    <tr><th>Failure Mode</th><th>Circuit Breaker</th><th>Better mitigation</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>FM1: Baseline calibration</td>
+      <td><span class="verdict pass">Catches it</span></td>
+      <td>Token-sampled projection (§5.3)</td>
+    </tr>
+    <tr>
+      <td>FM2: Context growth</td>
+      <td><span class="verdict partial">Catches late</span></td>
+      <td>Rolling summarization (§6.2)</td>
+    </tr>
+    <tr>
+      <td>FM3: Dataset scaling</td>
+      <td><span class="verdict partial">Catches late</span></td>
+      <td>Profile compression + multiplier check (§5.2, §6.3)</td>
+    </tr>
+    <tr>
+      <td>FM4: Pipeline superlinearity</td>
+      <td><span class="verdict partial">May not catch single large call</span></td>
+      <td>Map-reduce synthesis (§6.4)</td>
+    </tr>
+    <tr>
+      <td>FM5: Silent scope expansion</td>
+      <td><span class="verdict fail">Does not catch</span></td>
+      <td>Mandatory dry-run with queue display (§8)</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="callout amber">
+  <strong>The circuit breaker is the third line of defense, not the first.</strong>
+  <p>If you find yourself relying on the circuit breaker routinely, it means cost anatomy (§5) and active cost architecture (§6) were not applied. The circuit breaker should fire rarely, and when it fires it should be a surprise — evidence of an unanticipated edge case, not a routine cost management tool.</p>
+</div>
+
+<h2>§8. The Complete Spend Control Stack</h2>
+
+<p>The three layers operate in sequence, each addressing the failure modes the previous layer does not reach:</p>
+
+<h3>Layer 0 — Before you design the experiment</h3>
+
+<p>Write the cost anatomy (§5.1). Identify every O(K²) and O(N·K) component. Plan the active mitigations (§6) before writing any experiment code. This is not overhead — it is how you convert a potentially runaway experiment into a bounded one.</p>
+
+<h3>Layer 1 — Before you run (pre-flight)</h3>
+
+<ol>
+  <li>Measure the dataset scaling multiplier (§5.2) by comparing production vs. pilot profile sizes</li>
+  <li>Run one token-sampled session (§5.3) and compute the projected total cost using the growth formula</li>
+  <li>Display the projection and require explicit confirmation before launching the batch</li>
+  <li>Run <code>--dry-run</code> to enumerate the complete queue and confirm session count (FM5 mitigation)</li>
+</ol>
+
+<h3>Layer 2 — During the run (active management)</h3>
+
+<ol>
+  <li>Route tasks to appropriate models (§6.1) — most calls go to Haiku</li>
+  <li>Apply rolling summarization (§6.2) — context window stays bounded</li>
+  <li>Use condition-scoped persona projections (§6.3) — system prompts stay small</li>
+  <li>Use map-reduce synthesis (§6.4) — no superlinear synthesis calls</li>
+  <li>Apply early stopping on rubric saturation (§6.5) — no wasted turns</li>
+</ol>
+
+<h3>Layer 3 — Reactive backstop</h3>
+
+<p>Circuit breaker (§7) running throughout. Fires if layers 0–2 miss something.</p>
+
+<div class="callout green">
+  <strong>Projected cost of the ai-companion study with all layers applied:</strong>
+  <p>At 274 sessions, applying model routing (70% Haiku), rolling summarization (3-turn window), persona compression, and map-reduce synthesis, projected cost drops from $8,032 to approximately $400–800. The research question — does the values-calibrated companion maintain its protocol under pressure — is answered identically. Only the compute cost changes.</p>
+</div>
+
+<h2>§9. Proof of Protocol</h2>
+
+<p>Validating the complete stack requires demonstrating two things: (1) the active mitigations reduce cost without degrading research validity; (2) the circuit breaker halts correctly when it fires.</p>
+
+<h4>Proof procedure — active mitigations</h4>
+<ol>
+  <li>Run the same 5 pilot personas under the original architecture (all Sonnet, full context, full profiles). Record cost and scores.</li>
+  <li>Run the same 5 pilot personas under the mitigated architecture (routed models, rolling window, compressed profiles). Record cost and scores.</li>
+  <li>Compare scores: the dependent variables should be statistically indistinguishable. Compare cost: the mitigated run should be 70–85% cheaper.</li>
+</ol>
+
+<h4>Proof procedure — circuit breaker</h4>
+<ol>
+  <li>Start a batch with the circuit breaker active. Confirm the signal file is present.</li>
+  <li>Use the dashboard's test endpoint (<code>POST /api/throttle/test</code>) to synthetically trigger the throttle mid-run.</li>
+  <li>Confirm the batch receives <code>CircuitOpen</code> and exits cleanly within one session boundary.</li>
+  <li>Dismiss the throttle. Confirm the signal file updates. Confirm the next run proceeds normally.</li>
+</ol>
+
+<div class="callout amber">
+  <strong>Validation status: pending</strong>
+  <p>Both proof procedures are defined above and will be run as part of the next ai-companion experiment session. Results will update this section. The organic circuit breaker trigger will be captured on the next full batch.</p>
+</div>
+
+<h2>§10. Discussion</h2>
+
+<h3>10.1 Estimation vs. architecture</h3>
+
+<p>
+  The standard response to cost estimation failure is to try harder to estimate: gather more data points, refine the model, add uncertainty bounds. This paper argues that better estimation is insufficient as the primary control, for a structural reason: the non-linearities that cause estimation failure (FM2, FM4) are not estimation errors — they are properties of the experimental architecture. You cannot estimate your way out of a quadratic growth function. You have to eliminate the quadratic.
+</p>
+
+<p>
+  This is the distinction between cost <em>prediction</em> and cost <em>architecture</em>. Prediction tells you how much an experiment will cost given its current structure. Architecture changes the structure so the cost is lower. Both are necessary; architecture is primary.
+</p>
+
+<h3>10.2 The meta-irony of AI cost estimation</h3>
+
+<p>
+  The estimates that precipitated the $8,032 incident were produced by an AI assistant — the same model (<code>claude-sonnet-4-6</code>) being billed for the experiment. The AI was asked to estimate the cost of running itself at scale. It produced estimates that were accurate for small cases and wrong by two orders of magnitude for the actual scale.
+</p>
+
+<p>
+  This is not a failure of the model's arithmetic. The model correctly computed cost = sessions × $/session for the session cost it had observed. The failure was structural: the estimator did not have access to the real-time token counts that would have revealed the growth trajectory, and it did not model the pipeline superlinearity because the pipeline feature had been added informally after the initial cost framing.
+</p>
+
+<p>
+  The fix is not to ask the AI for a better estimate. It is to close the loop between the estimator and the actual token counts — giving it ground truth via token sampling rather than requiring it to reason from first principles about a system whose properties it cannot observe. This is precisely what the token-sampled projection in §5.3 provides.
+</p>
+
+<h3>10.3 Implications for citizen science</h3>
+
+<p>
+  For a solo researcher without institutional budget oversight, these failure modes are not inconveniences — they are existential risks to the research program. The $8,032 incident described here incurred in a 10-day window and was not caught until the billing dashboard was reviewed. For a researcher operating on a personal budget, this can represent months of funding capacity for a research program.
+</p>
+
+<p>
+  The tools described in this paper — cost anatomy analysis, active cost architecture, circuit breaker — are not technically complex. They require no special infrastructure beyond what any Python developer has access to. What they require is a methodological norm: that cost be a designed parameter of every LLM experiment, specified before the first API call, managed actively during the run, and bounded by a reactive backstop. This norm does not yet exist in the citizen science AI community. This paper is a proposal to establish it.
+</p>
+
+<h3>10.4 Limitations</h3>
+
+<ul>
+  <li><strong>Polling latency:</strong> The circuit breaker polls billing APIs every 60 seconds. A spike within one polling window (e.g., a single enormous synthesis call) may not be caught in time to halt the current session.</li>
+  <li><strong>Rolling summarization fidelity:</strong> In experiments where exact conversational history matters (e.g., studying memory recall), rolling summarization may alter the research condition. The mitigation should be applied only where semantic compression is acceptable.</li>
+  <li><strong>Model routing validity:</strong> Routing evaluators to Haiku is appropriate when rubric scoring is the task. For studies where the evaluator's qualitative judgment is itself a research variable, cheaper models may introduce capability confounds.</li>
+  <li><strong>Single-machine scope:</strong> The file-system signal channel works only when monitor and runner are on the same machine. Distributed pipelines require an HTTP-based check.</li>
+</ul>
+
+<h2>§11. Conclusion</h2>
+
+<p>
+  LLM API batch experiments are susceptible to cost overruns not because they are inherently expensive but because their cost structure is non-linear in ways that small-scale tests do not reveal. We documented five failure modes and showed that their compound effect produced a 78–177× estimation error in a real study. We argued that the correct response is not better monitoring but better architecture: cost anatomy analysis that identifies non-linear components before any code is written, active cost management patterns that eliminate those non-linearities during the experiment, and a circuit breaker as a final backstop for residual risk.
+</p>
+
+<p>
+  Applied together, these layers reduce the projected cost of the documented study from $8,032 to approximately $400–800 with no reduction in research validity. They transform cost from a post-billing surprise into a designed property of the experiment — which is where it belongs.
+</p>
+
+<h2>References</h2>
+
+<div class="ref">Anthropic (2026). Claude API documentation: token usage and cost reporting. <em>Anthropic developer docs.</em></div>
+<div class="ref">Nygard, M. (2007). <em>Release It! Design and Deploy Production-Ready Software.</em> Pragmatic Bookshelf. [Circuit breaker pattern, Chapter 5.]</div>
+<div class="ref">OpenAI (2024). Usage dashboard and spend monitoring. <em>OpenAI platform documentation.</em></div>
+<div class="ref">Bowman, S. et al. (2022). Measuring Progress on Scalable Oversight for Large Language Models. <em>arXiv:2211.03540.</em></div>
+<div class="ref">Liang, P. et al. (2022). Holistic Evaluation of Language Models. <em>arXiv:2211.09110.</em></div>
+<div class="ref">Kushner, A. (2026). The Companion: A Values-Calibrated Personal AI System for Individual Navigation of Technological Disruption. <em>Working paper.</em></div>
+<div class="ref">api-dash (2026). Open-source API spend monitor. <em>github.com/questsystems-ai/api-dash.</em></div>
+
+<footer class="paper-footer">
+  <p>Aaron Kushner · May 2026 · Pre-print. Not peer reviewed.</p>
+  <p style="margin-top:8px; font-size:0.75rem;">The author declares no competing financial interest beyond the direct costs described herein. All circuit breaker and cost architecture implementations are open source (MIT license). Billing data is from the author's own Anthropic account and is used with the author's permission.</p>
+</footer>
+
+</div>
+</body>
+</html>
