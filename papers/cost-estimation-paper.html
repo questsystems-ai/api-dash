@@ -329,6 +329,29 @@ sup { font-size: 0.7em; color: #3b82f6; }
   For a solo researcher without institutional oversight, a multi-thousand-dollar billing event is not an operational cost — it is potentially the end of the research program. The citizen scientist model requires that solo operators have the same guardrails available to institutional researchers, implemented in tooling rather than requiring organizational infrastructure.
 </p>
 
+<h3>2.3 Existing cost management tools and their limitations</h3>
+
+<p>
+  Three categories of tooling address LLM cost management today. Understanding their limitations is necessary context for the approach this paper proposes.
+</p>
+
+<p>
+  <strong>Provider-native monitoring.</strong> Anthropic, OpenAI, and other major API providers offer usage dashboards, monthly budget caps, and email alerts when spend crosses a threshold. These are designed for organizational billing management, not per-experiment cost control. A monthly cap fires after the damage is done — it has no mechanism to prevent a single overnight batch from exhausting it. As of this writing, no major provider offers a pre-flight cost estimate, a per-run gate, or an experiment-scoped stop condition in their native tooling.
+</p>
+
+<p>
+  <strong>Third-party spend dashboards.</strong> Tools such as api-dash (open source, referenced in §7), Helicone, and LangSmith provide real-time token and cost monitoring at the call level. These improve visibility significantly — a researcher can see spend accumulate in real time rather than discovering it the following day on a billing statement. Visibility is necessary but not sufficient. The May 1 spike in §4 triggered api-dash's daily-ratio alert correctly, within seconds of the threshold crossing. The batch had already completed. A monitor that cannot halt a running process is a post-mortem tool, not a control.
+</p>
+
+<p>
+  <strong>Application-level circuit breakers.</strong> The most direct mechanism is a circuit breaker: a component that halts API calls when a spend threshold is crossed. This addresses run-time overruns but not the root cause — a non-linear experimental design that will blow through any reasonable threshold if not restructured. No general-purpose circuit breaker library exists for LLM experiment runners; existing implementations are ad hoc and project-specific.
+</p>
+
+<div class="callout warning">
+  <strong>The shared gap across all three categories:</strong>
+  <p>All intervene <em>after</em> cost is being incurred. None address cost at the experimental design level — before any API calls are made. The methodology described in §§5–8 moves cost management upstream, into the structure of the experiment itself. The circuit breaker (§7) is the third line of defense, not the first.</p>
+</div>
+
 <h2>§3. Taxonomy of Failure Modes</h2>
 
 <p>We identify five distinct mechanisms that compound to produce the observed estimation gap.</p>

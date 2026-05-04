@@ -804,6 +804,42 @@ async function fetchFalCosts(start, end) {
 
     if (totalCost === 0 && Object.keys(byModel).length === 0) return null;
 
+    // Supplement with Supabase generations table for video models (not in fal billing API)
+    if (supabase) {
+      try {
+        const { data: genRows, error } = await supabase
+          .from("generations")
+          .select("video_model, cost, type, created_at")
+          .eq("type", "video")
+          .gte("created_at", start + "T00:00:00Z")
+          .lte("created_at", end + "T23:59:59.999Z")
+          .order("created_at", { ascending: true });
+
+        if (!error && genRows && genRows.length > 0) {
+          for (const r of genRows) {
+            const model = r.video_model || "unknown-video";
+            if (model.startsWith("r-") || model.startsWith("v-") || model.startsWith("modal-")) continue;
+            const cost = parseFloat(r.cost || "0");
+            const date = (r.created_at || "").slice(0, 10);
+            totalCost += cost;
+            if (!byModel[model]) byModel[model] = { count: 0, cost: 0 };
+            byModel[model].count += 1;
+            byModel[model].cost += cost;
+            if (date) dailyMap[date] = (dailyMap[date] || 0) + cost;
+            if (date) {
+              if (!dailyByModel[date]) dailyByModel[date] = {};
+              if (!dailyByModel[date][model]) dailyByModel[date][model] = { cost: 0, count: 0 };
+              dailyByModel[date][model].cost += cost;
+              dailyByModel[date][model].count += 1;
+            }
+          }
+          console.log(`  ✓ fal (supabase video supplement): ${genRows.length} video generations merged`);
+        }
+      } catch (e) {
+        console.warn("  [fal] supabase video supplement error:", e.message);
+      }
+    }
+
     const daily = Object.entries(dailyMap)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, cost]) => ({ date, cost: +cost.toFixed(6) }));
@@ -906,6 +942,48 @@ async function fetchSupabaseCosts(provider, start, end, clientOverride = null) {
   }
 }
 
+
+// ── Supabase generations table reader (fal image + video gens per project) ───
+
+async function fetchSupabaseGenerations(start, end, client) {
+  if (!client) return null;
+  try {
+    const { data, error } = await client
+      .from("generations")
+      .select("model, video_model, cost, type, created_at")
+      .gte("created_at", start + "T00:00:00Z")
+      .lte("created_at", end + "T23:59:59.999Z")
+      .order("created_at", { ascending: true });
+
+    if (error) { console.warn("  [generations] query error:", error.message); return null; }
+    if (!data || data.length === 0) return null;
+
+    const byModel = {};
+    const dailyMap = {};
+    let totalCost = 0;
+
+    for (const r of data) {
+      const model = r.type === "video" ? (r.video_model || r.model || "unknown-video") : (r.model || "unknown");
+      const cost = parseFloat(r.cost || "0");
+      const date = (r.created_at || "").slice(0, 10);
+      totalCost += cost;
+      if (!byModel[model]) byModel[model] = { count: 0, cost: 0 };
+      byModel[model].count += 1;
+      byModel[model].cost += cost;
+      if (date) dailyMap[date] = (dailyMap[date] || 0) + cost;
+    }
+
+    const daily = Object.entries(dailyMap)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, cost]) => ({ date, cost: +cost.toFixed(6) }));
+
+    console.log(`  ✓ generations (supabase): $${totalCost.toFixed(4)} across ${data.length} rows`);
+    return { totalCost, byModel, daily, source: "supabase" };
+  } catch (e) {
+    console.warn("  [generations] error:", e.message);
+    return null;
+  }
+}
 
 // ── SQLite cost reader (local data folder or per-project spend.db) ────────────
 
@@ -1292,6 +1370,31 @@ async function fetchAllProviders() {
         projectSlug: project.slug,
       });
     }));
+
+    // Always add a generations tile for this project (fal image + video gens)
+    const genCacheKey = `gp_${project.slug}_generations`;
+    let genData = getCached(genCacheKey);
+    if (!genData) {
+      genData = await fetchSupabaseGenerations(start, end, projectClient);
+      if (genData) setCache(genCacheKey, genData);
+    }
+    if (genData) {
+      providers.push({
+        id: `gp_${project.slug}_generations`,
+        label: `${project.title} / All Generations`,
+        color: "#4ade80",
+        totalCost: genData.totalCost,
+        byModel: genData.byModel || {},
+        daily: genData.daily || [],
+        extra: null,
+        source: genData.source || "supabase",
+        carbon: estimateCarbon("fal", genData.totalCost),
+        noBillingApi: false,
+        dashboardUrl: null,
+        isGoogleProject: true,
+        projectSlug: project.slug,
+      });
+    }
   }));
 
   const grandTotal = providers.reduce((s, p) => s + p.totalCost, 0);
